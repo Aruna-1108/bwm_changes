@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 ### Bwm Custom
 
 BWM Custom
@@ -31,3 +32,6 @@ Pre-commit is configured to use the following tools for checking and formatting 
 ### License
 
 mit
+=======
+# bwm_changes
+>>>>>>> origin/main

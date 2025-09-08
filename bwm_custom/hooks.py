@@ -117,13 +117,16 @@ app_license = "mit"
 # -----------
 # Permissions evaluated in scripted ways
 
-# permission_query_conditions = {
-# 	"Event": "frappe.desk.doctype.event.event.get_permission_query_conditions",
-# }
-#
-# has_permission = {
-# 	"Event": "frappe.desk.doctype.event.event.has_permission",
-# }
+# Permissions
+permission_query_conditions = {
+    "Leave Application": "bwm_custom.leave_application.get_permission_query_conditions",
+    "Permission Form":"bwm_custom.permission_form.get_permission_query_conditions"
+}
+
+has_permission = {
+    "Leave Application": "bwm_custom.leave_application.has_permission",
+    "Permission Form":"bwm_custom.permission_form.has_permission"
+}
 
 # DocType Class
 # ---------------
@@ -137,13 +140,21 @@ app_license = "mit"
 # ---------------
 # Hook on document methods and events
 
-# doc_events = {
-# 	"*": {
-# 		"on_update": "method",
-# 		"on_cancel": "method",
-# 		"on_trash": "method"
-# 	}
-# }
+doc_events = {
+    # "*": {
+    #     "on_update": "method",
+    #     "on_cancel": "method",
+    #     "on_trash": "method"
+    # },
+
+    "Job Card": {
+        "validate": "bwm_custom.job_card_events.validate_job_card",
+        "on_submit": "bwm_custom.job_card_events.on_submit_job_card"
+    }
+}
+
+
+
 
 # Scheduled Tasks
 # ---------------
