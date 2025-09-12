@@ -1,0 +1,38 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "creation": "2025-09-09 13:29:23.025131",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "section_break_q76i",
+  "visit_id"
+ ],
+ "fields": [
+  {
+   "fieldname": "section_break_q76i",
+   "fieldtype": "Section Break"
+  },
+  {
+   "fieldname": "visit_id",
+   "fieldtype": "Link",
+   "label": "Visit Id",
+   "options": "Visit Doctype"
+  }
+ ],
+ "grid_page_length": 50,
+ "index_web_pages_for_search": 1,
+ "istable": 1,
+ "links": [],
+ "modified": "2025-09-09 15:10:15.656376",
+ "modified_by": "Administrator",
+ "module": "Bwm Custom",
+ "name": "Run Sheet Logs",
+ "owner": "Administrator",
+ "permissions": [],
+ "row_format": "Dynamic",
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}
