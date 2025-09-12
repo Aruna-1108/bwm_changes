@@ -84,8 +84,7 @@ def on_submit_job_card(doc, method=None):
 
     # Update Work Order Operation child row
     updates = {"completed_qty": total_qty}
-    if frappe.db.has_column("Work Order Operation", "time_in_mins"):
-        updates["time_in_mins"] = total_mins
+   
     elif frappe.db.has_column("Work Order Operation", "actual_operation_time"):
         updates["actual_operation_time"] = total_mins
     frappe.db.set_value("Work Order Operation", op_row, updates, update_modified=False)
