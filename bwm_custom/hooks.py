@@ -159,7 +159,7 @@ doc_events = {
 # Scheduled Tasks
 # ---------------
 
-# scheduler_events = {
+scheduler_events = {
 # 	"all": [
 # 		"bwm_custom.tasks.all"
 # 	],
@@ -175,7 +175,12 @@ doc_events = {
 # 	"monthly": [
 # 		"bwm_custom.tasks.monthly"
 # 	],
-# }
+    
+    "hourly": [
+        "bwm_custom.essl.sync_last_n_days_transactions"
+    ]
+}
+
 
 # Testing
 # -------
@@ -252,4 +257,5 @@ doc_events = {
 # default_log_clearing_doctypes = {
 # 	"Logging DocType Name": 30  # days to retain logs
 # }
+
 
