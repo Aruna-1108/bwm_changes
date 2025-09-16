@@ -1,31 +1,14 @@
 # bwm_custom/bwm_custom/essl_sync.py
 # eSSL (webapiservice.asmx) → ERPNext Employee Checkin via GetTransactionsLog
-#
-# Reads config from an ESSL settings DocType (can be Single or non-Single):
-#   - essl_api_url (Data)
-#   - essl_user_name (Data)  ← alias for essl_username
-#   - essl_password (Data)   ← plain text (no decryption)
-#   - custom_essl_serial_number (Data)  ← alias for essl_serial_number (optional)
-#   - essl_days_back (Int) (optional, default 7)
-#   - essl_allow_duplicates (Check) (optional)
-#
-# Public whitelisted endpoints:
-#   1) essl_sync_transactions(from_datetime, to_datetime, serial_number="", preview=0)
-#   2) essl_sync(from_datetime, to_datetime, preview=0, serial_number="")
-#   3) essl_conf_debug()  ← quick config sanity check (does NOT return password)
-#
-# Typical Server Script (Scheduler Event) call:
-#   frappe.call("bwm_custom.essl_sync.essl_sync",
-#               from_datetime=from_dt, to_datetime=to_dt, preview=0)
+# Option B: near real-time polling (every minute) using cursor + overlap
 
 import html
 import re
 from datetime import datetime, timedelta
-from collections import defaultdict
 
 import frappe
 import requests
-from frappe.utils import getdate, get_datetime, cint
+from frappe.utils import get_datetime, cint
 
 SOAP_NS = "http://schemas.xmlsoap.org/soap/envelope/"
 TEMPURI = "http://tempuri.org/"
@@ -45,6 +28,7 @@ _CONF_ALIASES = {
     "essl_days_back":        ["essl_days_back"],
     "essl_allow_duplicates": ["essl_allow_duplicates"],
     "essl_site_url":         ["custom_site_url", "site_url"],  # not required; debug only
+    "essl_last_cursor":      ["essl_last_cursor"],             # <-- NEW (Datetime)
 }
 
 def _get_settings_doc():
@@ -192,13 +176,7 @@ def _map_employee(emp_code: str) -> str | None:
     name = frappe.db.get_value("Employee", {"employee_number": emp_code}, "name")
     return name  # could be None
 
-def _has_field(doctype: str, fieldname: str) -> bool:
-    try:
-        return fieldname in frappe.get_meta(doctype).get_fieldnames()
-    except Exception:
-        return False
-
-def _insert_checkin(emp: str, ts, device_name=None, device_location=None):
+def _insert_checkin(emp: str, ts, device_id="Biometrics"):
     """Insert Employee Checkin with de-dup (NO log_type used)."""
     if not emp or not ts:
         return "skipped_invalid", None
@@ -207,15 +185,12 @@ def _insert_checkin(emp: str, ts, device_name=None, device_location=None):
     if not allow_dups and frappe.db.exists("Employee Checkin", {"employee": emp, "time": ts}):
         return "skipped_existing", None
 
-    doc_dict = {
+    doc = frappe.get_doc({
         "doctype": "Employee Checkin",
         "employee": emp,
         "time": ts,
-        "device_id": "Biometrics"
-    }
- 
-
-    doc = frappe.get_doc(doc_dict)
+        "device_id": device_id
+    })
     doc.flags.ignore_permissions = True
     doc.insert()
     return "inserted", doc.name
@@ -251,7 +226,7 @@ def essl_sync_transactions(from_datetime: str,
         "to": to_datetime,
         "serial_number": serial,
         "preview": bool(preview),
-        "counts": {"fetched": len(raw_rows), "inserted": 0, "skipped_existing": 0, "unmatched": 0},
+        "counts": {"fetched": len(raw_rows), "inserted": 0, "skipped_existing": 0, "skipped_invalid": 0, "unmatched": 0},
         "unmatched": [],   # up to 50 examples of unmapped employees
         "examples": [],    # up to 10 inserted (or preview) rows
     }
@@ -277,7 +252,7 @@ def essl_sync_transactions(from_datetime: str,
                 out["examples"].append({"employee": emp, "time": str(ts)})
             continue
 
-        status, name = _insert_checkin(emp, ts, device_name="Biometrics")
+        status, name = _insert_checkin(emp, ts, device_id="Biometrics")
         if status not in out["counts"]:
             out["counts"][status] = 0
         out["counts"][status] += 1
@@ -297,7 +272,52 @@ def essl_sync(from_datetime: str, to_datetime: str, preview: int | str = 0, seri
     )
 
 # ---------------------------------------------------------------------------
-# Scheduler helper (optional; if you wire via hooks.py instead of Server Script)
+# Cursor helpers + 1-minute tick (Option B)
+# ---------------------------------------------------------------------------
+def _get_last_cursor():
+    try:
+        return _conf_from_settings("essl_last_cursor")
+    except Exception:
+        return None
+
+def _set_last_cursor(dt_str: str):
+    try:
+        if frappe.get_meta(SETTINGS_DOTYPE).is_single:
+            frappe.db.set_value(SETTINGS_DOTYPE, SETTINGS_NAME, "essl_last_cursor", dt_str)
+        else:
+            name = frappe.db.get_value(SETTINGS_DOTYPE, {}, "name", order_by="modified desc")
+            if name:
+                frappe.db.set_value(SETTINGS_DOTYPE, name, "essl_last_cursor", dt_str)
+        frappe.db.commit()
+    except Exception:
+        pass
+
+@frappe.whitelist()
+def sync_realtime_tick(overlap_seconds: int = 90, backfill_minutes_if_empty: int = 10, preview: int | str = 0):
+    """
+    Run every minute:
+      - to   = now
+      - from = (last_cursor - overlap) OR (now - backfill) if cursor empty
+    De-dup makes it idempotent.
+    """
+    now = datetime.now()
+    to_dt = now.strftime("%Y-%m-%d %H:%M:%S")
+
+    last = _get_last_cursor()
+    if last:
+        start = get_datetime(last) - timedelta(seconds=max(0, int(overlap_seconds)))
+    else:
+        start = now - timedelta(minutes=max(1, int(backfill_minutes_if_empty)))
+    from_dt = start.strftime("%Y-%m-%d %H:%M:%S")
+
+    # Prevent overlapping runs
+    with frappe.cache().lock("essl_realtime_sync_lock", timeout=55):
+        out = essl_sync_transactions(from_dt, to_dt, preview=preview)
+        _set_last_cursor(to_dt)
+        return out
+
+# ---------------------------------------------------------------------------
+# (Optional) legacy n-days pull
 # ---------------------------------------------------------------------------
 def sync_last_n_days_transactions():
     """Pull last n days (essl_days_back, default 7) up to now; safe due to de-dup."""
@@ -311,7 +331,7 @@ def sync_last_n_days_transactions():
         frappe.log_error(frappe.get_traceback(), f"eSSL GetTransactionsLog sync failed: {e}")
 
 # ---------------------------------------------------------------------------
-# Debug endpoint (does NOT reveal password)(For Checking)
+# Debug endpoint (does NOT reveal password)
 # ---------------------------------------------------------------------------
 @frappe.whitelist()
 def essl_conf_debug():
@@ -326,5 +346,6 @@ def essl_conf_debug():
         "essl_days_back": _conf("essl_days_back"),
         "essl_allow_duplicates": _conf("essl_allow_duplicates"),
         "essl_site_url": _conf("essl_site_url"),
+        "essl_last_cursor": _conf("essl_last_cursor"),
         "password_present": bool(_conf("essl_password")),
     }

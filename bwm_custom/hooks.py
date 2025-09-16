@@ -159,27 +159,27 @@ doc_events = {
 # Scheduled Tasks
 # ---------------
 
-scheduler_events = {
-# 	"all": [
-# 		"bwm_custom.tasks.all"
-# 	],
-# 	"daily": [
-# 		"bwm_custom.tasks.daily"
-# 	],
-# 	"hourly": [
-# 		"bwm_custom.tasks.hourly"
-# 	],
-# 	"weekly": [
-# 		"bwm_custom.tasks.weekly"
-# 	],
-# 	"monthly": [
-# 		"bwm_custom.tasks.monthly"
-# 	],
+# scheduler_events = {
+# # 	"all": [
+# # 		"bwm_custom.tasks.all"
+# # 	],
+# # 	"daily": [
+# # 		"bwm_custom.tasks.daily"
+# # 	],
+# # 	"hourly": [
+# # 		"bwm_custom.tasks.hourly"
+# # 	],
+# # 	"weekly": [
+# # 		"bwm_custom.tasks.weekly"
+# # 	],
+# # 	"monthly": [
+# # 		"bwm_custom.tasks.monthly"
+# # 	],
     
-    "hourly": [
-        "bwm_custom.essl.sync_last_n_days_transactions"
-    ]
-}
+#     "hourly": [
+#         "bwm_custom.essl.sync_last_n_days_transactions"
+#     ]
+# }
 
 
 # Testing

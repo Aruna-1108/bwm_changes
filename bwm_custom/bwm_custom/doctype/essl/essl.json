@@ -7,9 +7,11 @@
  "field_order": [
   "essl_api_url",
   "essl_password",
+  "essl_last_cursor",
   "column_break_xdjd",
   "essl_user_name",
-  "essl_days_back"
+  "essl_days_back",
+  "essl_allow_duplicates"
  ],
  "fields": [
   {
@@ -35,12 +37,22 @@
    "fieldname": "essl_days_back",
    "fieldtype": "Data",
    "label": "ESSL Day Back"
+  },
+  {
+   "fieldname": "essl_last_cursor",
+   "fieldtype": "Datetime",
+   "label": "ESSL Last Cursor"
+  },
+  {
+   "fieldname": "essl_allow_duplicates",
+   "fieldtype": "Data",
+   "label": "ESSL Allow Duplicates"
   }
  ],
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2025-09-15 10:54:54.506138",
+ "modified": "2025-09-16 17:05:56.751992",
  "modified_by": "Administrator",
  "module": "Bwm Custom",
  "name": "ESSL",
