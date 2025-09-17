@@ -251,9 +251,32 @@ doc_events = {
 # 	"bwm_custom.auth.validate"
 # ]
 
-Fixtures = [
-    "fixtures.py"
+
+
+
+fixtures = [
+    {
+        "doctype": "Custom Field",
+        "filters": [
+            ["name", "in", [
+                "ESSL-custom_essl_serial_number",
+                "ESSL-custom_site_url"
+            ]]
+        ]
+    },
+    {
+        "doctype": "Server Script",
+        "filters": [
+            ["name", "in", [
+                "Essl Minutes wise"
+            ]]
+        ]
+    }
 ]
+
+
+
+
 
 # Automatically update python controller files with type annotations for this app.
 # export_python_type_annotations = True
