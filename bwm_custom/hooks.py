@@ -43,7 +43,7 @@ app_license = "mit"
 # page_js = {"page" : "public/js/file.js"}
 
 # include js in doctype views
-# doctype_js = {"doctype" : "public/js/doctype.js"}
+doctype_js = {"Visit Doctype": "bwm_custom/doctype/visit_doctype/visit_doctype.js"}
 # doctype_list_js = {"doctype" : "public/js/doctype_list.js"}
 # doctype_tree_js = {"doctype" : "public/js/doctype_tree.js"}
 # doctype_calendar_js = {"doctype" : "public/js/doctype_calendar.js"}
@@ -160,22 +160,27 @@ doc_events = {
 # ---------------
 
 # scheduler_events = {
-# 	"all": [
-# 		"bwm_custom.tasks.all"
-# 	],
-# 	"daily": [
-# 		"bwm_custom.tasks.daily"
-# 	],
-# 	"hourly": [
-# 		"bwm_custom.tasks.hourly"
-# 	],
-# 	"weekly": [
-# 		"bwm_custom.tasks.weekly"
-# 	],
-# 	"monthly": [
-# 		"bwm_custom.tasks.monthly"
-# 	],
+# # 	"all": [
+# # 		"bwm_custom.tasks.all"
+# # 	],
+# # 	"daily": [
+# # 		"bwm_custom.tasks.daily"
+# # 	],
+# # 	"hourly": [
+# # 		"bwm_custom.tasks.hourly"
+# # 	],
+# # 	"weekly": [
+# # 		"bwm_custom.tasks.weekly"
+# # 	],
+# # 	"monthly": [
+# # 		"bwm_custom.tasks.monthly"
+# # 	],
+    
+#     "hourly": [
+#         "bwm_custom.essl.sync_last_n_days_transactions"
+#     ]
 # }
+
 
 # Testing
 # -------
@@ -246,10 +251,38 @@ doc_events = {
 # 	"bwm_custom.auth.validate"
 # ]
 
+
+
+
+fixtures = [
+    {
+        "doctype": "Custom Field",
+        "filters": [
+            ["name", "in", [
+                "ESSL-custom_essl_serial_number",
+                "ESSL-custom_site_url"
+            ]]
+        ]
+    },
+    {
+        "doctype": "Server Script",
+        "filters": [
+            ["name", "in", [
+                "Essl Minutes wise"
+            ]]
+        ]
+    }
+]
+
+
+
+
+
 # Automatically update python controller files with type annotations for this app.
 # export_python_type_annotations = True
 
 # default_log_clearing_doctypes = {
 # 	"Logging DocType Name": 30  # days to retain logs
 # }
+
 

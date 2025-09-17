@@ -1,0 +1,130 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "creation": "2025-09-09 12:31:53.897808",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "section_break_hvkl",
+  "employee",
+  "employee__name",
+  "odameter_start_km",
+  "odameter_end_km",
+  "column_break_nnyd",
+  "company",
+  "cost_center",
+  "section_break_c1sf",
+  "create_visit",
+  "visit_logs_section",
+  "visit_history",
+  "department",
+  "branch"
+ ],
+ "fields": [
+  {
+   "fieldname": "section_break_hvkl",
+   "fieldtype": "Section Break"
+  },
+  {
+   "fieldname": "employee",
+   "fieldtype": "Link",
+   "label": "Employee",
+   "options": "Employee"
+  },
+  {
+   "fetch_from": "employee.custom_cost_center",
+   "fieldname": "cost_center",
+   "fieldtype": "Link",
+   "label": "Cost Center",
+   "options": "Cost Center"
+  },
+  {
+   "fieldname": "company",
+   "fieldtype": "Link",
+   "label": "Company",
+   "options": "Company"
+  },
+  {
+   "fieldname": "column_break_nnyd",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "section_break_c1sf",
+   "fieldtype": "Section Break"
+  },
+  {
+   "bold": 1,
+   "columns": 4,
+   "fieldname": "create_visit",
+   "fieldtype": "Button",
+   "label": "Create Visit",
+   "max_height": "300 px",
+   "width": "1200 px"
+  },
+  {
+   "fieldname": "odameter_start_km",
+   "fieldtype": "Float",
+   "label": "Odameter Start Km"
+  },
+  {
+   "fieldname": "odameter_end_km",
+   "fieldtype": "Float",
+   "label": "Odameter End Km"
+  },
+  {
+   "fieldname": "visit_logs_section",
+   "fieldtype": "Section Break",
+   "label": "Visit Logs"
+  },
+  {
+   "fieldname": "visit_history",
+   "fieldtype": "Table",
+   "label": "Visit History",
+   "options": "Run Sheet Logs"
+  },
+  {
+   "fetch_from": "employee.employee_name",
+   "fieldname": "employee__name",
+   "fieldtype": "Data",
+   "label": "Employee  Name"
+  },
+  {
+   "fetch_from": "employee.department",
+   "fieldname": "department",
+   "fieldtype": "Data",
+   "label": "Department"
+  },
+  {
+   "fetch_from": "employee.branch",
+   "fieldname": "branch",
+   "fieldtype": "Data",
+   "label": "Branch"
+  }
+ ],
+ "grid_page_length": 50,
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2025-09-10 09:54:30.130628",
+ "modified_by": "Administrator",
+ "module": "Bwm Custom",
+ "name": "Run Sheet",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "row_format": "Dynamic",
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

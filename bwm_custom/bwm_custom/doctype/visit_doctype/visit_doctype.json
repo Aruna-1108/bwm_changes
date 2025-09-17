@@ -1,0 +1,301 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "creation": "2025-09-09 09:53:54.679162",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "section_break_alyd",
+  "visit_date",
+  "employee",
+  "company",
+  "phone",
+  "column_break_2lnw",
+  "cost_center",
+  "territory",
+  "party_type",
+  "party",
+  "party_address",
+  "mobile_number",
+  "section_break_0uwx",
+  "column_break_cmic",
+  "check_in",
+  "check_in_time",
+  "in_geo_location",
+  "in_latitude",
+  "in_longitude",
+  "column_break_ouuc",
+  "check_out",
+  "check_out_time",
+  "out_geo_location",
+  "out_latitude",
+  "out_longitude",
+  "section_break_zdea",
+  "on_site_proof",
+  "column_break_llmv",
+  "durationin_minutes",
+  "section_break_m68a",
+  "purpose",
+  "column_break_rtah",
+  "outcome",
+  "section_break_tiy6",
+  "nesta_pre",
+  "amended_from",
+  "column_break_gkhk",
+  "nesta__post",
+  "notes_and_signals_section",
+  "visit_item",
+  "summary_notes",
+  "run_sheet"
+ ],
+ "fields": [
+  {
+   "fieldname": "section_break_alyd",
+   "fieldtype": "Section Break"
+  },
+  {
+   "default": "Today",
+   "fieldname": "visit_date",
+   "fieldtype": "Date",
+   "label": "Visit Date"
+  },
+  {
+   "fieldname": "employee",
+   "fieldtype": "Link",
+   "label": "Employee",
+   "options": "Employee"
+  },
+  {
+   "fetch_from": "employee.company",
+   "fieldname": "company",
+   "fieldtype": "Link",
+   "label": "Company",
+   "options": "Company"
+  },
+  {
+   "fetch_from": "employee.custom_cost_center",
+   "fieldname": "cost_center",
+   "fieldtype": "Link",
+   "label": "Cost Center",
+   "options": "Cost Center"
+  },
+  {
+   "fetch_from": "employee.custom_territory",
+   "fieldname": "territory",
+   "fieldtype": "Link",
+   "label": "Territory",
+   "options": "Territory"
+  },
+  {
+   "fieldname": "column_break_2lnw",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "section_break_0uwx",
+   "fieldtype": "Section Break"
+  },
+  {
+   "fieldname": "check_in",
+   "fieldtype": "Button",
+   "label": "Check In"
+  },
+  {
+   "fieldname": "check_out",
+   "fieldtype": "Button",
+   "label": "Check Out"
+  },
+  {
+   "fieldname": "column_break_cmic",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "column_break_ouuc",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "check_in_time",
+   "fieldtype": "Datetime",
+   "label": "Check In Time"
+  },
+  {
+   "fieldname": "in_geo_location",
+   "fieldtype": "Geolocation",
+   "label": " In Geo Location"
+  },
+  {
+   "fieldname": "check_out_time",
+   "fieldtype": "Datetime",
+   "label": "Check Out Time"
+  },
+  {
+   "fieldname": "out_geo_location",
+   "fieldtype": "Geolocation",
+   "label": "Out Geo Location"
+  },
+  {
+   "fieldname": "on_site_proof",
+   "fieldtype": "Attach",
+   "label": "On Site Proof"
+  },
+  {
+   "fieldname": "section_break_zdea",
+   "fieldtype": "Section Break"
+  },
+  {
+   "fieldname": "purpose",
+   "fieldtype": "Select",
+   "label": "Purpose",
+   "options": "Intro\nNeed Capture\nTech Discussion\nPrice Objection\nCollection\nComplaint\nCompetition\nDistributor Mgmt\nSite Audit"
+  },
+  {
+   "fieldname": "outcome",
+   "fieldtype": "Select",
+   "label": "Outcome",
+   "options": "Opportunity Created\nQuote Shared\nInfo Gathered\nRelationship\nNo Show\nRefused\nNext Step Needed"
+  },
+  {
+   "fieldname": "amended_from",
+   "fieldtype": "Link",
+   "label": "Amended From",
+   "no_copy": 1,
+   "options": "Visit Doctype",
+   "print_hide": 1,
+   "read_only": 1,
+   "search_index": 1
+  },
+  {
+   "fieldname": "in_latitude",
+   "fieldtype": "Float",
+   "label": "In latitude"
+  },
+  {
+   "fieldname": "in_longitude",
+   "fieldtype": "Float",
+   "label": "In Longitude"
+  },
+  {
+   "fieldname": "out_latitude",
+   "fieldtype": "Float",
+   "label": "Out latitude"
+  },
+  {
+   "fieldname": "out_longitude",
+   "fieldtype": "Float",
+   "label": "Out Longitude"
+  },
+  {
+   "default": "Customer",
+   "fieldname": "party_type",
+   "fieldtype": "Link",
+   "label": "Party Type",
+   "link_filters": "[[\"DocType\",\"name\",\"in\", [\"Customer\", \"Lead\", \"Prospect\", \"CRM Deal\"]]]",
+   "options": "DocType"
+  },
+  {
+   "fieldname": "party",
+   "fieldtype": "Dynamic Link",
+   "label": "Party",
+   "options": "party_type"
+  },
+  {
+   "fieldname": "phone",
+   "fieldtype": "Data",
+   "label": "Phone"
+  },
+  {
+   "fieldname": "section_break_m68a",
+   "fieldtype": "Section Break"
+  },
+  {
+   "fieldname": "column_break_llmv",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "durationin_minutes",
+   "fieldtype": "Date",
+   "label": "Duration(In Minutes)"
+  },
+  {
+   "fieldname": "column_break_rtah",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "section_break_tiy6",
+   "fieldtype": "Section Break",
+   "label": "Nesta Qualifications"
+  },
+  {
+   "fieldname": "nesta_pre",
+   "fieldtype": "Rating",
+   "label": "NESTA - Pre"
+  },
+  {
+   "fieldname": "nesta__post",
+   "fieldtype": "Rating",
+   "label": "NESTA  Post"
+  },
+  {
+   "fieldname": "column_break_gkhk",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "notes_and_signals_section",
+   "fieldtype": "Section Break",
+   "label": "Notes and Signals"
+  },
+  {
+   "fieldname": "summary_notes",
+   "fieldtype": "Small Text",
+   "label": "Summary Notes"
+  },
+  {
+   "fieldname": "visit_item",
+   "fieldtype": "Table",
+   "label": "Visit Item",
+   "options": "Visit Item"
+  },
+  {
+   "fieldname": "run_sheet",
+   "fieldtype": "Link",
+   "label": "Run Sheet",
+   "options": "Run Sheet"
+  },
+  {
+   "fieldname": "party_address",
+   "fieldtype": "Small Text",
+   "label": "Party Party Address"
+  },
+  {
+   "fieldname": "mobile_number",
+   "fieldtype": "Data",
+   "label": " Party Mobile Number"
+  }
+ ],
+ "grid_page_length": 50,
+ "index_web_pages_for_search": 1,
+ "is_submittable": 1,
+ "links": [],
+ "modified": "2025-09-10 09:57:22.866962",
+ "modified_by": "Administrator",
+ "module": "Bwm Custom",
+ "name": "Visit Doctype",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "row_format": "Dynamic",
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

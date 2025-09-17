@@ -1,0 +1,58 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "creation": "2025-09-09 12:24:50.383113",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "section_break_hkhq",
+  "item",
+  "spec",
+  "item_name",
+  "timeline"
+ ],
+ "fields": [
+  {
+   "fieldname": "section_break_hkhq",
+   "fieldtype": "Section Break"
+  },
+  {
+   "fieldname": "item",
+   "fieldtype": "Link",
+   "label": "Item",
+   "options": "Item"
+  },
+  {
+   "fieldname": "spec",
+   "fieldtype": "Data",
+   "label": "Spec"
+  },
+  {
+   "fetch_from": "item.item_name",
+   "fieldname": "item_name",
+   "fieldtype": "Data",
+   "label": "Item Name"
+  },
+  {
+   "fieldname": "timeline",
+   "fieldtype": "Select",
+   "label": "Timeline",
+   "options": "\nImmediate\n< 30 Days\n30-90 Days\n>90 Days"
+  }
+ ],
+ "grid_page_length": 50,
+ "index_web_pages_for_search": 1,
+ "istable": 1,
+ "links": [],
+ "modified": "2025-09-09 12:27:11.142625",
+ "modified_by": "Administrator",
+ "module": "Bwm Custom",
+ "name": "Visit Item",
+ "owner": "Administrator",
+ "permissions": [],
+ "row_format": "Dynamic",
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

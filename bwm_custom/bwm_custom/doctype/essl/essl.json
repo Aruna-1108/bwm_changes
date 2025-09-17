@@ -1,0 +1,78 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "creation": "2025-09-13 14:49:27.388839",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "essl_api_url",
+  "essl_password",
+  "essl_last_cursor",
+  "column_break_xdjd",
+  "essl_user_name",
+  "essl_days_back",
+  "essl_allow_duplicates"
+ ],
+ "fields": [
+  {
+   "fieldname": "essl_api_url",
+   "fieldtype": "Data",
+   "label": "ESSL API Url"
+  },
+  {
+   "fieldname": "essl_password",
+   "fieldtype": "Data",
+   "label": "ESSL Password"
+  },
+  {
+   "fieldname": "column_break_xdjd",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "essl_user_name",
+   "fieldtype": "Data",
+   "label": "ESSL User Name"
+  },
+  {
+   "fieldname": "essl_days_back",
+   "fieldtype": "Data",
+   "label": "ESSL Day Back"
+  },
+  {
+   "fieldname": "essl_last_cursor",
+   "fieldtype": "Datetime",
+   "label": "ESSL Last Cursor"
+  },
+  {
+   "fieldname": "essl_allow_duplicates",
+   "fieldtype": "Data",
+   "label": "ESSL Allow Duplicates"
+  }
+ ],
+ "grid_page_length": 50,
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2025-09-16 17:05:56.751992",
+ "modified_by": "Administrator",
+ "module": "Bwm Custom",
+ "name": "ESSL",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "row_format": "Dynamic",
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}
