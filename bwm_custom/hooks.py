@@ -251,6 +251,10 @@ doc_events = {
 # 	"bwm_custom.auth.validate"
 # ]
 
+Fixtures = [
+    "fixtures.py"
+]
+
 # Automatically update python controller files with type annotations for this app.
 # export_python_type_annotations = True
 

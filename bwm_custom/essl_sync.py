@@ -1,6 +1,11 @@
 # bwm_custom/bwm_custom/essl_sync.py
 # eSSL (webapiservice.asmx) → ERPNext Employee Checkin via GetTransactionsLog
 # Option B: near real-time polling (every minute) using cursor + overlap
+#
+# Enhancements:
+# - Auto IN/OUT (log_type) inference per employee per day (alternating)
+# - Backfill utility to fill log_type for already-inserted blank rows
+# - Settings toggle: essl_infer_log_type (defaults to ON)
 
 import html
 import re
@@ -28,7 +33,8 @@ _CONF_ALIASES = {
     "essl_days_back":        ["essl_days_back"],
     "essl_allow_duplicates": ["essl_allow_duplicates"],
     "essl_site_url":         ["custom_site_url", "site_url"],  # not required; debug only
-    "essl_last_cursor":      ["essl_last_cursor"],             # <-- NEW (Datetime)
+    "essl_last_cursor":      ["essl_last_cursor"],             # Datetime
+    "essl_infer_log_type":   ["essl_infer_log_type"],          # Check (0/1); optional; defaults to ON
 }
 
 def _get_settings_doc():
@@ -36,12 +42,10 @@ def _get_settings_doc():
     try:
         meta = frappe.get_meta(SETTINGS_DOTYPE)
         if getattr(meta, "is_single", 0):
-            # Single DocType: only pass doctype
             return frappe.get_cached_doc(SETTINGS_DOTYPE)
     except Exception:
         pass
 
-    # Non-Single: pick latest modified row (or any)
     name = frappe.db.get_value(SETTINGS_DOTYPE, {}, "name", order_by="modified desc")
     return frappe.get_doc(SETTINGS_DOTYPE, name) if name else None
 
@@ -160,7 +164,7 @@ def _parse_strdatalist(data_text: str):
     return rows
 
 # ---------------------------------------------------------------------------
-# Mapping & insertion (NO log_type logic)
+# Mapping & insertion (WITH log_type logic)
 # ---------------------------------------------------------------------------
 def _map_employee(emp_code: str) -> str | None:
     """Map device emp_code → Employee.name via:
@@ -176,20 +180,46 @@ def _map_employee(emp_code: str) -> str | None:
     name = frappe.db.get_value("Employee", {"employee_number": emp_code}, "name")
     return name  # could be None
 
+def _infer_log_type(emp: str, ts) -> str:
+    """
+    Decide IN/OUT by alternating punches for an employee per calendar day.
+    1st punch of the day → IN, 2nd → OUT, 3rd → IN, ...
+    Uses rows strictly BEFORE current ts to choose the next state deterministically.
+    """
+    r = frappe.db.sql(
+        """
+        SELECT COUNT(*) AS c
+        FROM `tabEmployee Checkin`
+        WHERE employee = %s
+          AND DATE(time) = DATE(%s)
+          AND time < %s
+        """,
+        (emp, ts, ts),
+        as_dict=True,
+    )
+    c = (r[0]["c"] if r else 0) or 0
+    return "IN" if c % 2 == 0 else "OUT"
+
 def _insert_checkin(emp: str, ts, device_id="Biometrics"):
-    """Insert Employee Checkin with de-dup (NO log_type used)."""
+    """Insert Employee Checkin with de-dup and auto log_type (IN/OUT)."""
     if not emp or not ts:
         return "skipped_invalid", None
 
+    # De-dup by (employee, time)
     allow_dups = cint(_conf("essl_allow_duplicates", 0))
     if not allow_dups and frappe.db.exists("Employee Checkin", {"employee": emp, "time": ts}):
         return "skipped_existing", None
+
+    log_type = None
+    if cint(_conf("essl_infer_log_type", 1)):  # default ON
+        log_type = _infer_log_type(emp, ts)
 
     doc = frappe.get_doc({
         "doctype": "Employee Checkin",
         "employee": emp,
         "time": ts,
-        "device_id": device_id
+        "device_id": device_id,
+        **({"log_type": log_type} if log_type else {}),
     })
     doc.flags.ignore_permissions = True
     doc.insert()
@@ -203,7 +233,7 @@ def essl_sync_transactions(from_datetime: str,
                            to_datetime: str,
                            serial_number: str = "",
                            preview: int | str = 0):
-    """Fetch logs via GetTransactionsLog and (optionally) insert Employee Checkins (no log_type)."""
+    """Fetch logs via GetTransactionsLog and (optionally) insert Employee Checkins (with IN/OUT)."""
     _check_required_conf_transactions()
     preview = cint(preview)
     serial = (serial_number or _conf("essl_serial_number") or "")
@@ -242,7 +272,7 @@ def essl_sync_transactions(from_datetime: str,
             continue
         mapped.append({"employee": emp, "ts": r["ts"]})
 
-    # Insert or preview (NO IN/OUT alternation)
+    # Insert or preview
     for m in mapped:
         emp = m["employee"]
         ts = m["ts"]
@@ -331,6 +361,68 @@ def sync_last_n_days_transactions():
         frappe.log_error(frappe.get_traceback(), f"eSSL GetTransactionsLog sync failed: {e}")
 
 # ---------------------------------------------------------------------------
+# Backfill (one-time utility) — fill blank log_type by alternating per employee/day
+# ---------------------------------------------------------------------------
+@frappe.whitelist()
+def essl_backfill_log_type(employee: str = None, date_from: str = None, date_to: str = None, dry_run: int | str = 1):
+    """
+    Fill missing log_type by alternating IN/OUT per employee per day, ordered by time.
+    - Optional filters: employee, date_from, date_to (YYYY-MM-DD).
+    - dry_run=1 -> only returns what would change.
+    """
+    dry = cint(dry_run)
+    params = []
+    where = ["(ec.log_type IS NULL OR ec.log_type = '')"]
+
+    if employee:
+        where.append("ec.employee = %s")
+        params.append(employee)
+    if date_from:
+        where.append("DATE(ec.time) >= %s")
+        params.append(date_from)
+    if date_to:
+        where.append("DATE(ec.time) <= %s")
+        params.append(date_to)
+
+    rows = frappe.db.sql(
+        f"""
+        SELECT ec.name, ec.employee, ec.time
+        FROM `tabEmployee Checkin` ec
+        WHERE {" AND ".join(where)}
+        ORDER BY ec.employee, DATE(ec.time), ec.time
+        """,
+        tuple(params),
+        as_dict=True,
+    )
+
+    out = {"to_update": 0, "updated": 0, "samples": []}
+    last_emp = None
+    last_date = None
+    flip = 0   # 0=>IN, 1=>OUT
+
+    for r in rows:
+        emp = r["employee"]
+        d = r["time"].date()
+        if emp != last_emp or d != last_date:
+            flip = 0
+            last_emp, last_date = emp, d
+
+        log_type = "IN" if flip == 0 else "OUT"
+        flip = 1 - flip
+
+        if dry:
+            if len(out["samples"]) < 20:
+                out["samples"].append({"name": r["name"], "employee": emp, "time": str(r["time"]), "log_type": log_type})
+            out["to_update"] += 1
+        else:
+            frappe.db.set_value("Employee Checkin", r["name"], "log_type", log_type, update_modified=False)
+            out["updated"] += 1
+
+    if not dry and rows:
+        frappe.db.commit()
+    return out
+
+# ---------------------------------------------------------------------------
 # Debug endpoint (does NOT reveal password)
 # ---------------------------------------------------------------------------
 @frappe.whitelist()
@@ -347,5 +439,6 @@ def essl_conf_debug():
         "essl_allow_duplicates": _conf("essl_allow_duplicates"),
         "essl_site_url": _conf("essl_site_url"),
         "essl_last_cursor": _conf("essl_last_cursor"),
+        "essl_infer_log_type": cint(_conf("essl_infer_log_type", 1)),
         "password_present": bool(_conf("essl_password")),
     }
