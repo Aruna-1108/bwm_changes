@@ -120,12 +120,23 @@ doctype_js = {"Visit Doctype": "bwm_custom/doctype/visit_doctype/visit_doctype.j
 # Permissions
 permission_query_conditions = {
     "Leave Application": "bwm_custom.leave_application.get_permission_query_conditions",
-    "Permission Form":"bwm_custom.permission_form.get_permission_query_conditions"
+    "Permission Form":"bwm_custom.permission_form.get_permission_query_conditions",
+    "Salary Slip":"bwm_custom.salary_slip.salary_slip_permission",
+    "Expense Claim":"bwm_custom.expense_claim.get_permission_query_conditions",
+    "Attendance Request":"bwm_custom.attendance_request.get_permission_query_conditions",
+    "Compensatory Leave Request":"bwm_custom.compensatory_leave_request.get_permission_query_conditions",
+    "Employee Advance":"bwm_custom.employee_advance.get_permission_query_conditions"
 }
 
 has_permission = {
     "Leave Application": "bwm_custom.leave_application.has_permission",
-    "Permission Form":"bwm_custom.permission_form.has_permission"
+    "Permission Form":"bwm_custom.permission_form.has_permission",
+    "Salary Slip":"bwm_custom.salary_slip.salary_slip_has_permission",
+    "Expense Claim":"bwm_custom.expense_claim.has_permission",
+    "Attendance Request":"bwm_custom.attendance_request.has_permission",
+    "Compensatory Leave Request":"bwm_custom.compensatory_leave_request.has_permission",
+    "Employee Advance":"bwm_custom.employee_advance.has_permission"
+
 }
 
 # DocType Class
