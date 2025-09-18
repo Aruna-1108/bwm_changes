@@ -2,7 +2,13 @@
 # eSSL (webapiservice.asmx) → ERPNext Employee Checkin via GetTransactionsLog
 # Option B: near real-time polling (every minute) using cursor + overlap
 #
-# Enhancements:
+# Multi-Device Enhancements:
+# - Supports multiple Serial Numbers (CSV in ESSL.essl_serial_number, or ESSL child table "essl_serials")
+# - Per-device cursor (last_cursor) when child table exists; falls back to global essl_last_cursor
+# - Single tick iterates all enabled devices, applying overlap and dedup per device
+# - Employee Checkin.device_id is set to "ESSL:<serial>"
+#
+# IN/OUT Enhancements:
 # - Auto IN/OUT (log_type) inference per employee per day (alternating)
 # - Backfill utility to fill log_type for already-inserted blank rows
 # - Settings toggle: essl_infer_log_type (defaults to ON)
@@ -29,14 +35,26 @@ _CONF_ALIASES = {
     "essl_api_url":          ["essl_api_url"],
     "essl_username":         ["essl_username", "essl_user_name"],
     "essl_password":         ["essl_password"],  # plain Data field
-    "essl_serial_number":    ["essl_serial_number", "custom_essl_serial_number", "serial_number"],
+    "essl_serial_number":    ["essl_serial_number", "custom_essl_serial_number", "serial_number"],  # may be CSV
     "essl_days_back":        ["essl_days_back"],
     "essl_allow_duplicates": ["essl_allow_duplicates"],
     "essl_site_url":         ["custom_site_url", "site_url"],  # not required; debug only
-    "essl_last_cursor":      ["essl_last_cursor"],             # Datetime
+    "essl_last_cursor":      ["essl_last_cursor"],             # Datetime (global fallback)
     "essl_infer_log_type":   ["essl_infer_log_type"],          # Check (0/1); optional; defaults to ON
 }
 
+# Optional child table on ESSL settings:
+# Fieldname on ESSL: essl_serials (Table)
+# Child DocType: "ESSL Serial" with fields:
+#   - serial_number (Data, req)
+#   - enabled (Check, default 1)
+#   - last_cursor (Datetime)
+#   - device_label (Data, optional)
+
+
+# ---------------------------------------------------------------------------
+# Config getters
+# ---------------------------------------------------------------------------
 def _get_settings_doc():
     """Return the ESSL settings doc (Single or most recently modified non-Single row)."""
     try:
@@ -48,6 +66,7 @@ def _get_settings_doc():
 
     name = frappe.db.get_value(SETTINGS_DOTYPE, {}, "name", order_by="modified desc")
     return frappe.get_doc(SETTINGS_DOTYPE, name) if name else None
+
 
 def _conf_from_settings(key):
     """Read a logical key from the ESSL settings record (password is plain)."""
@@ -69,6 +88,7 @@ def _conf_from_settings(key):
             return val
     return None
 
+
 def _conf(key, default=None):
     """Resolve value with precedence: ESSL settings → site_config → default."""
     # 1) ESSL settings
@@ -87,12 +107,132 @@ def _conf(key, default=None):
     # 3) default
     return default
 
+
 def _check_required_conf_transactions():
     """Ensure minimum config exists before calling the SOAP API."""
     required = ("essl_api_url", "essl_username", "essl_password")
     missing = [k for k in required if not _conf(k)]
     if missing:
         raise frappe.ValidationError(f"Missing ESSL settings: {', '.join(missing)}")
+
+
+# ---------------------------------------------------------------------------
+# Serial number management (CSV or Child Table)
+# ---------------------------------------------------------------------------
+def _parse_csv_serials(csv_val: str) -> list[str]:
+    out = []
+    if not csv_val:
+        return out
+    for tok in re.split(r"[,\s]+", str(csv_val)):
+        s = tok.strip()
+        if s and s.upper() != "ALL":
+            out.append(s)
+    # dedupe keep order
+    seen = set()
+    uniq = []
+    for s in out:
+        if s not in seen:
+            seen.add(s)
+            uniq.append(s)
+    return uniq
+
+
+def _get_child_rows_or_none(doc):
+    """Return list of child rows if ESSL has a Table field 'essl_serials'; else None."""
+    try:
+        rows = getattr(doc, "essl_serials", None)
+        if isinstance(rows, list):
+            return rows
+    except Exception:
+        pass
+    return None
+
+
+def _get_all_serials() -> list[str]:
+    """
+    Return the list of serial numbers to poll (enabled only if child table present).
+    Priority:
+      1) Child table 'essl_serials' (enabled == 1)
+      2) CSV in ESSL.essl_serial_number (comma/whitespace separated)
+    """
+    doc = _get_settings_doc()
+    if not doc:
+        return []
+
+    rows = _get_child_rows_or_none(doc)
+    if rows:
+        vals = [ (r.get("serial_number") or "").strip() for r in rows if cint(r.get("enabled", 1)) ]
+        return [v for v in vals if v]
+
+    # fallback: CSV
+    return _parse_csv_serials(_conf("essl_serial_number") or "")
+
+
+def _get_last_cursor_global() -> str | None:
+    try:
+        return _conf_from_settings("essl_last_cursor")
+    except Exception:
+        return None
+
+
+def _set_last_cursor_global(dt_str: str):
+    try:
+        if frappe.get_meta(SETTINGS_DOTYPE).is_single:
+            frappe.db.set_value(SETTINGS_DOTYPE, SETTINGS_NAME, "essl_last_cursor", dt_str)
+        else:
+            name = frappe.db.get_value(SETTINGS_DOTYPE, {}, "name", order_by="modified desc")
+            if name:
+                frappe.db.set_value(SETTINGS_DOTYPE, name, "essl_last_cursor", dt_str)
+        frappe.db.commit()
+    except Exception:
+        pass
+
+
+def _get_last_cursor_for_serial(serial: str) -> str | None:
+    """
+    If child table exists, return per-device last_cursor.
+    Else return global last_cursor.
+    """
+    doc = _get_settings_doc()
+    if not doc:
+        return None
+
+    rows = _get_child_rows_or_none(doc)
+    if rows:
+        for r in rows:
+            if (r.get("serial_number") or "").strip() == serial:
+                return r.get("last_cursor")
+        return None
+    # fallback: global
+    return _get_last_cursor_global()
+
+
+def _set_last_cursor_for_serial(serial: str, dt_str: str):
+    """
+    If child table exists, update per-device last_cursor.
+    Else update global last_cursor.
+    """
+    doc = _get_settings_doc()
+    if not doc:
+        return
+
+    rows = _get_child_rows_or_none(doc)
+    if rows:
+        changed = False
+        for r in rows:
+            if (r.get("serial_number") or "").strip() == serial:
+                r.last_cursor = dt_str
+                changed = True
+                break
+        if changed:
+            # Save Single/non-Single settings doc safely
+            doc.save(ignore_permissions=True)
+            frappe.db.commit()
+        return
+
+    # fallback: global
+    _set_last_cursor_global(dt_str)
+
 
 # ---------------------------------------------------------------------------
 # SOAP helpers
@@ -106,6 +246,7 @@ def _soap_envelope(inner_xml: str) -> str:
     {inner_xml}
   </soap:Body>
 </soap:Envelope>""".strip()
+
 
 def _soap_call_raw(method: str, params: dict) -> str:
     """POST a SOAP 1.1 call and return the FULL envelope text (we parse manually)."""
@@ -128,6 +269,7 @@ def _soap_call_raw(method: str, params: dict) -> str:
     resp.raise_for_status()
     return resp.text
 
+
 # ---------------------------------------------------------------------------
 # Response parsing
 # ---------------------------------------------------------------------------
@@ -143,6 +285,7 @@ def _parse_transactions_xml(resp_xml: str):
     data_text = (m_data.group(1) if m_data else "")
     data_text = html.unescape(data_text)
     return result_text, data_text
+
 
 def _parse_strdatalist(data_text: str):
     """Parse TAB-separated lines → [{'emp_code': str, 'ts': datetime}, ...]."""
@@ -163,6 +306,7 @@ def _parse_strdatalist(data_text: str):
         rows.append({"emp_code": emp_code, "ts": ts})
     return rows
 
+
 # ---------------------------------------------------------------------------
 # Mapping & insertion (WITH log_type logic)
 # ---------------------------------------------------------------------------
@@ -179,6 +323,7 @@ def _map_employee(emp_code: str) -> str | None:
         return emp_code
     name = frappe.db.get_value("Employee", {"employee_number": emp_code}, "name")
     return name  # could be None
+
 
 def _infer_log_type(emp: str, ts) -> str:
     """
@@ -199,6 +344,7 @@ def _infer_log_type(emp: str, ts) -> str:
     )
     c = (r[0]["c"] if r else 0) or 0
     return "IN" if c % 2 == 0 else "OUT"
+
 
 def _insert_checkin(emp: str, ts, device_id="Biometrics"):
     """Insert Employee Checkin with de-dup and auto log_type (IN/OUT)."""
@@ -225,23 +371,20 @@ def _insert_checkin(emp: str, ts, device_id="Biometrics"):
     doc.insert()
     return "inserted", doc.name
 
+
 # ---------------------------------------------------------------------------
-# PUBLIC APIs
+# PUBLIC APIs: single-device sync (internal use by the multi-device tick)
 # ---------------------------------------------------------------------------
-@frappe.whitelist()
-def essl_sync_transactions(from_datetime: str,
-                           to_datetime: str,
-                           serial_number: str = "",
-                           preview: int | str = 0):
-    """Fetch logs via GetTransactionsLog and (optionally) insert Employee Checkins (with IN/OUT)."""
+def _sync_one_device(from_datetime: str, to_datetime: str, serial_number: str, preview: int | str = 0):
+    """Fetch logs via GetTransactionsLog for ONE device and insert Employee Checkins."""
     _check_required_conf_transactions()
     preview = cint(preview)
-    serial = (serial_number or _conf("essl_serial_number") or "")
+    serial = (serial_number or "").strip()
 
     payload = {
         "FromDateTime": from_datetime,
         "ToDateTime": to_datetime,
-        "SerialNumber": serial,
+        "SerialNumber": serial,  # device serial; required by server to scope
         "UserName": _conf("essl_username"),
         "UserPassword": _conf("essl_password"),
     }
@@ -282,7 +425,7 @@ def essl_sync_transactions(from_datetime: str,
                 out["examples"].append({"employee": emp, "time": str(ts)})
             continue
 
-        status, name = _insert_checkin(emp, ts, device_id="Biometrics")
+        status, name = _insert_checkin(emp, ts, device_id=f"ESSL:{serial or 'UNKNOWN'}")
         if status not in out["counts"]:
             out["counts"][status] = 0
         out["counts"][status] += 1
@@ -291,74 +434,91 @@ def essl_sync_transactions(from_datetime: str,
 
     return out
 
+
 @frappe.whitelist()
 def essl_sync(from_datetime: str, to_datetime: str, preview: int | str = 0, serial_number: str = ""):
-    """Thin wrapper around essl_sync_transactions (keeps server-script call short)."""
-    return essl_sync_transactions(
-        from_datetime=from_datetime,
-        to_datetime=to_datetime,
-        serial_number=serial_number or "",
-        preview=preview,
-    )
+    """
+    Thin wrapper for one device (kept for backward compatibility / ad-hoc runs).
+    Prefer sync_realtime_tick() which loops all configured serials.
+    """
+    return _sync_one_device(from_datetime, to_datetime, serial_number=serial_number, preview=preview)
+
 
 # ---------------------------------------------------------------------------
-# Cursor helpers + 1-minute tick (Option B)
+# Cursor helpers + 1-minute tick (Option B) — MULTI DEVICE
 # ---------------------------------------------------------------------------
-def _get_last_cursor():
-    try:
-        return _conf_from_settings("essl_last_cursor")
-    except Exception:
-        return None
-
-def _set_last_cursor(dt_str: str):
-    try:
-        if frappe.get_meta(SETTINGS_DOTYPE).is_single:
-            frappe.db.set_value(SETTINGS_DOTYPE, SETTINGS_NAME, "essl_last_cursor", dt_str)
-        else:
-            name = frappe.db.get_value(SETTINGS_DOTYPE, {}, "name", order_by="modified desc")
-            if name:
-                frappe.db.set_value(SETTINGS_DOTYPE, name, "essl_last_cursor", dt_str)
-        frappe.db.commit()
-    except Exception:
-        pass
-
 @frappe.whitelist()
 def sync_realtime_tick(overlap_seconds: int = 90, backfill_minutes_if_empty: int = 10, preview: int | str = 0):
     """
-    Run every minute:
+    Run every minute for ALL configured devices:
       - to   = now
-      - from = (last_cursor - overlap) OR (now - backfill) if cursor empty
+      - from = (per-device last_cursor - overlap) OR (now - backfill) if cursor empty
     De-dup makes it idempotent.
     """
     now = datetime.now()
     to_dt = now.strftime("%Y-%m-%d %H:%M:%S")
+    serials = _get_all_serials()
 
-    last = _get_last_cursor()
-    if last:
-        start = get_datetime(last) - timedelta(seconds=max(0, int(overlap_seconds)))
-    else:
-        start = now - timedelta(minutes=max(1, int(backfill_minutes_if_empty)))
-    from_dt = start.strftime("%Y-%m-%d %H:%M:%S")
+    out = {
+        "to": to_dt,
+        "preview": bool(cint(preview)),
+        "devices": [],
+        "totals": {"fetched": 0, "inserted": 0, "skipped_existing": 0, "skipped_invalid": 0, "unmatched": 0},
+    }
 
-    # Prevent overlapping runs
+    # Prevent overlapping runs (single lock for the whole batch)
     with frappe.cache().lock("essl_realtime_sync_lock", timeout=55):
-        out = essl_sync_transactions(from_dt, to_dt, preview=preview)
-        _set_last_cursor(to_dt)
-        return out
+        for sn in serials or [""]:  # allow empty to support legacy single-device misconfig
+            try:
+                last = _get_last_cursor_for_serial(sn)
+                if last:
+                    start = get_datetime(last) - timedelta(seconds=max(0, int(overlap_seconds)))
+                else:
+                    start = now - timedelta(minutes=max(1, int(backfill_minutes_if_empty)))
+                from_dt = start.strftime("%Y-%m-%d %H:%M:%S")
+
+                dev_res = _sync_one_device(from_dt, to_dt, serial_number=sn, preview=preview)
+
+                # accumulate totals
+                for k in out["totals"].keys():
+                    out["totals"][k] += dev_res["counts"].get(k, 0)
+
+                out["devices"].append(dev_res)
+
+                # Update per-device cursor only on success
+                _set_last_cursor_for_serial(sn, to_dt)
+
+            except Exception as e:
+                # do not advance cursor on failure; log error
+                frappe.log_error(frappe.get_traceback(), f"eSSL realtime device [{sn}] failed: {e}")
+                out["devices"].append({
+                    "serial_number": sn,
+                    "error": str(e),
+                })
+
+    return out
+
 
 # ---------------------------------------------------------------------------
-# (Optional) legacy n-days pull
+# (Optional) legacy n-days pull (Multi-device)
 # ---------------------------------------------------------------------------
 def sync_last_n_days_transactions():
-    """Pull last n days (essl_days_back, default 7) up to now; safe due to de-dup."""
+    """Pull last n days (essl_days_back, default 7) up to now for ALL devices; safe due to de-dup."""
     try:
         n = cint(_conf("essl_days_back") or 7)
         now = datetime.now()
         to_dt = now.strftime("%Y-%m-%d %H:%M:%S")
         from_dt = (now - timedelta(days=max(1, n) - 1)).strftime("%Y-%m-%d 00:00:00")
-        essl_sync_transactions(from_dt, to_dt, preview=0)
+
+        for sn in _get_all_serials() or [""]:
+            try:
+                _sync_one_device(from_dt, to_dt, serial_number=sn, preview=0)
+                _set_last_cursor_for_serial(sn, to_dt)
+            except Exception as e:
+                frappe.log_error(frappe.get_traceback(), f"eSSL legacy pull device [{sn}] failed: {e}")
     except Exception as e:
-        frappe.log_error(frappe.get_traceback(), f"eSSL GetTransactionsLog sync failed: {e}")
+        frappe.log_error(frappe.get_traceback(), f"eSSL GetTransactionsLog multi-device sync failed: {e}")
+
 
 # ---------------------------------------------------------------------------
 # Backfill (one-time utility) — fill blank log_type by alternating per employee/day
@@ -422,6 +582,7 @@ def essl_backfill_log_type(employee: str = None, date_from: str = None, date_to:
         frappe.db.commit()
     return out
 
+
 # ---------------------------------------------------------------------------
 # Debug endpoint (does NOT reveal password)
 # ---------------------------------------------------------------------------
@@ -429,16 +590,23 @@ def essl_backfill_log_type(employee: str = None, date_from: str = None, date_to:
 def essl_conf_debug():
     """Quick check that settings are read correctly (password not returned)."""
     doc = _get_settings_doc()
+    serials = _get_all_serials()
+    per_device_cursors = []
+    for sn in serials or []:
+        per_device_cursors.append({"serial_number": sn, "last_cursor": _get_last_cursor_for_serial(sn)})
+
     return {
         "doc_found": bool(doc),
         "doc_name": getattr(doc, "name", None),
         "essl_api_url": _conf("essl_api_url"),
         "essl_username": _conf("essl_username"),
-        "essl_serial_number": _conf("essl_serial_number"),
+        "serials": serials,
         "essl_days_back": _conf("essl_days_back"),
         "essl_allow_duplicates": _conf("essl_allow_duplicates"),
         "essl_site_url": _conf("essl_site_url"),
-        "essl_last_cursor": _conf("essl_last_cursor"),
+        "global_last_cursor": _get_last_cursor_global(),
+        "per_device_cursors": per_device_cursors,
         "essl_infer_log_type": cint(_conf("essl_infer_log_type", 1)),
         "password_present": bool(_conf("essl_password")),
+        "child_table_present": bool(_get_child_rows_or_none(doc)),
     }
