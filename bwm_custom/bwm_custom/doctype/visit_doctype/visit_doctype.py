@@ -1,10 +1,10 @@
 # bwm_custom/bwm_custom/doctype/visit_doctype/visit_doctype.py
+import json
 import frappe
 from frappe.model.document import Document
 from frappe.utils import now_datetime, getdate
 
 ROUND_PLACES = 6
-
 
 # -----------------------------
 # Helpers
@@ -34,7 +34,7 @@ def _to_float(v):
 def _write_coords(doc: Document, prefix: str, lat, lng, accuracy):
     """
     Writes:
-      - {prefix}_geo_location (Geolocation JSON)
+      - {prefix}_geo_location (JSON/Geolocation → dict; Data/Text → JSON string)
       - {prefix}_latitude (Float/Data)
       - {prefix}_longitude (Float/Data)
     Ensure your DocType has those fieldnames.
@@ -49,11 +49,19 @@ def _write_coords(doc: Document, prefix: str, lat, lng, accuracy):
     if not (-90.0 <= lat <= 90.0 and -180.0 <= lng <= 180.0):
         frappe.throw("Invalid GPS coordinates.")
 
-    # Geolocation field expects a dict
-    doc.set(f"{prefix}_geo_location", {"lat": lat, "lng": lng, "accuracy": float(acc or 0.0)})
+    payload = {"lat": lat, "lng": lng, "accuracy": float(acc or 0.0)}
+    fld = f"{prefix}_geo_location"
+
+    # Decide how to store based on fieldtype
+    df = doc.meta.get_field(fld)
+    if df and df.fieldtype in ("JSON", "Geolocation"):
+        doc.set(fld, payload)  # framework serializes dict properly
+    else:
+        # Store as JSON string for Data/Small Text/etc to avoid pymysql dict error
+        doc.set(fld, json.dumps(payload, separators=(",", ":")))
 
     # Optional separate fields
-    doc.set(f"{prefix}_latitude",  _fmt(lat))
+    doc.set(f"{prefix}_latitude", _fmt(lat))
     doc.set(f"{prefix}_longitude", _fmt(lng))
 
 
@@ -66,8 +74,14 @@ def _get_party_contact_address(party_type: str, party: str) -> dict:
     Prefers default Address/Contact; falls back to most recently linked.
     Works for Customer, Lead, Prospect, Supplier, Employee, etc.
     """
-    out = {"address_name": None, "address_display": None, "contact_name": None,
-           "contact_mobile": None, "contact_phone": None, "contact_email": None}
+    out = {
+        "address_name": None,
+        "address_display": None,
+        "contact_name": None,
+        "contact_mobile": None,
+        "contact_phone": None,
+        "contact_email": None,
+    }
 
     if not party_type or not party:
         return out
@@ -96,8 +110,7 @@ def _get_party_contact_address(party_type: str, party: str) -> dict:
             out["address_name"] = address_name
             out["address_display"] = get_address_display(address_name)
     except Exception:
-        # keep graceful fallback (no hard fail)
-        pass
+        pass  # graceful fallback
 
     # ---------- Contact ----------
     contact_name = None
@@ -129,13 +142,21 @@ def _get_party_contact_address(party_type: str, party: str) -> dict:
         mobile = (contact.mobile_no or "").strip() or None
         phone = (contact.phone or "").strip() or None
         if not (mobile or phone) and getattr(contact, "phone_nos", None):
-            phone = (contact.phone_nos[0].get("phone") or "").strip() or None
+            try:
+                phone = (contact.phone_nos[0].get("phone") or "").strip() or None
+            except Exception:
+                phone = phone or None
         out["contact_mobile"] = mobile
         out["contact_phone"] = phone
-        out["contact_email"] = (contact.email_id or "").strip() or (
-            contact.email_ids[0].get("email_id").strip()
-            if getattr(contact, "email_ids", None) and contact.email_ids and contact.email_ids[0].get("email_id")
-            else None
+        out["contact_email"] = (
+            (contact.email_id or "").strip()
+            or (
+                contact.email_ids[0].get("email_id").strip()
+                if getattr(contact, "email_ids", None)
+                and contact.email_ids
+                and contact.email_ids[0].get("email_id")
+                else None
+            )
         )
 
     return out
@@ -156,7 +177,6 @@ def _maybe_fill_party_fields(doc: Document):
         return
 
     # Detect change if framework supports has_value_changed (v14+); else populate when blank.
-    changed = False
     try:
         changed = doc.has_value_changed("party") or doc.has_value_changed("party_type")
     except Exception:
@@ -174,7 +194,7 @@ def _maybe_fill_party_fields(doc: Document):
         doc.set("party_address", info.get("address_display") or "")
 
         # If you have a hidden Address link field, uncomment:
-        # if "party_address_name" in doc.meta.get_fieldnames():
+        # if "party_address_name" in [df.fieldname for df in doc.meta.get("fields", [])]:
         #     doc.set("party_address_name", info.get("address_name") or "")
 
     if needs_phone:
@@ -182,9 +202,9 @@ def _maybe_fill_party_fields(doc: Document):
         doc.set("mobile_number", phone_to_use)
 
     # If you have hidden Contact/Email fields, set them too (optional):
-    # if "contact" in doc.meta.get_fieldnames():
+    # if "contact" in [df.fieldname for df in doc.meta.get("fields", [])]:
     #     doc.set("contact", info.get("contact_name") or "")
-    # if "contact_email" in doc.meta.get_fieldnames():
+    # if "contact_email" in [df.fieldname for df in doc.meta.get("fields", [])]:
     #     doc.set("contact_email", info.get("contact_email") or "")
 
 
@@ -283,8 +303,12 @@ class VisitDoctype(Document):
         # Save parent
         rs.save(ignore_permissions=True)
 
-        # Realtime ping to refresh the Run Sheet form
-        frappe.publish_realtime(
-            event="visit_appended",
-            message={"run_sheet": rs.name, "visit_id": self.name}
-        )
+        # Realtime ping to refresh the Run Sheet form (optional)
+        try:
+            frappe.publish_realtime(
+                event="visit_appended",
+                message={"run_sheet": rs.name, "visit_id": self.name},
+            )
+        except Exception:
+            # Realtime is best-effort; don't block submit if not configured
+            pass
