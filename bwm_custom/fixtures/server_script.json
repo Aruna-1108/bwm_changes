@@ -9,13 +9,13 @@
   "doctype_event": "Before Insert",
   "enable_rate_limit": 0,
   "event_frequency": "Cron",
-  "modified": "2025-09-17 16:13:31.995455",
+  "modified": "2025-09-18 12:05:57.528950",
   "module": "",
   "name": "Essl Minutes wise",
   "rate_limit_count": 5,
   "rate_limit_seconds": 86400,
   "reference_doctype": "Employee Checkin",
-  "script": "# Run the near real-time tick every minute (Option B)\r\n# NOTE: Server Script safe_exec does not allow frappe.get_attr; use frappe.call.\r\nout = frappe.call(\r\n    \"bwm_custom.essl_sync.sync_realtime_tick\",\r\n    overlap_seconds=90,\r\n    backfill_minutes_if_empty=10,\r\n    preview=0\r\n)\r\n\r\n# (optional) quick console log to see a summary in scheduler output\r\nfrappe.errprint({\r\n    \"from\": out.get(\"from\"),\r\n    \"to\": out.get(\"to\"),\r\n    \"counts\": out.get(\"counts\", {}),\r\n    \"result\": out.get(\"result\")\r\n})\r\n",
+  "script": "# Server Script (Scheduler Event → every minute)\r\nfrappe.call(\r\n    \"bwm_custom.essl_sync.sync_realtime_tick\",\r\n    overlap_seconds=90,\r\n    backfill_minutes_if_empty=10,\r\n    preview=0\r\n)\r\n",
   "script_type": "Scheduler Event"
  }
 ]
