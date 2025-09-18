@@ -45,7 +45,7 @@
   },
   {
    "fieldname": "essl_allow_duplicates",
-   "fieldtype": "Data",
+   "fieldtype": "Check",
    "label": "ESSL Allow Duplicates"
   }
  ],
