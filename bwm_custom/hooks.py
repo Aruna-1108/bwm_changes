@@ -161,6 +161,9 @@ doc_events = {
     "Job Card": {
         "validate": "bwm_custom.job_card_events.validate_job_card",
         "on_submit": "bwm_custom.job_card_events.on_submit_job_card"
+    },
+    "Run Sheet":{
+        "validate":"bwm_custom.bwm_custom.doctype.run_sheet.run_sheet.validate"
     }
 }
 
@@ -271,15 +274,23 @@ fixtures = [
         "filters": [
             ["name", "in", [
                 "ESSL-custom_essl_serial_number",
-                "ESSL-custom_site_url"
+                "ESSL-custom_site_url",
+                "CRM Deal-custom_logs",
+                "CRM Deal-custom_runsheet_logs",
+                "Lead-custom_runsheet_reference",
+                "Lead-custom_runsheet_logs",
+                "Lead-custom_runsheet_logs",
+                "Customer-custom_runsheet_tab"
             ]]
         ]
     },
+
     {
         "doctype": "Server Script",
         "filters": [
             ["name", "in", [
-                "Essl Minutes wise"
+                "Essl Minutes wise",
+                "Employee check in - Biometrics"
             ]]
         ]
     }

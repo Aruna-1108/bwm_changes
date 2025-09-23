@@ -1,6 +1,7 @@
 {
  "actions": [],
  "allow_rename": 1,
+ "autoname": "format:VD-{####}",
  "creation": "2025-09-09 09:53:54.679162",
  "doctype": "DocType",
  "engine": "InnoDB",
@@ -8,25 +9,33 @@
   "section_break_alyd",
   "visit_date",
   "employee",
-  "company",
+  "party_type",
   "phone",
   "column_break_2lnw",
-  "cost_center",
-  "territory",
-  "party_type",
   "party",
   "party_address",
   "mobile_number",
   "section_break_0uwx",
   "column_break_cmic",
   "check_in",
+  "waiting_start",
+  "meeting_start",
   "check_in_time",
+  "waiting_start_time",
+  "meeting_start_time",
   "in_geo_location",
   "in_latitude",
   "in_longitude",
   "column_break_ouuc",
   "check_out",
+  "wating_end",
+  "meeting_end",
   "check_out_time",
+  "waiting_end_time",
+  "meeting_end_time",
+  "company",
+  "territory",
+  "cost_center",
   "out_geo_location",
   "out_latitude",
   "out_longitude",
@@ -97,7 +106,9 @@
   {
    "fieldname": "check_in",
    "fieldtype": "Button",
-   "label": "Check In"
+   "label": "Check In",
+   "max_height": "200 px",
+   "width": "12"
   },
   {
    "fieldname": "check_out",
@@ -269,16 +280,57 @@
    "fieldname": "mobile_number",
    "fieldtype": "Data",
    "label": " Party Mobile Number"
+  },
+  {
+   "fieldname": "meeting_start",
+   "fieldtype": "Button",
+   "label": "Meeting Start "
+  },
+  {
+   "fieldname": "meeting_end",
+   "fieldtype": "Button",
+   "label": "Meeting End "
+  },
+  {
+   "fieldname": "wating_end",
+   "fieldtype": "Button",
+   "label": "Waiting End "
+  },
+  {
+   "fieldname": "waiting_start",
+   "fieldtype": "Button",
+   "label": "Waiting Start "
+  },
+  {
+   "fieldname": "waiting_start_time",
+   "fieldtype": "Datetime",
+   "label": "Waiting Start Time"
+  },
+  {
+   "fieldname": "waiting_end_time",
+   "fieldtype": "Datetime",
+   "label": "Waiting End Time "
+  },
+  {
+   "fieldname": "meeting_start_time",
+   "fieldtype": "Datetime",
+   "label": "Meeting Start Time "
+  },
+  {
+   "fieldname": "meeting_end_time",
+   "fieldtype": "Datetime",
+   "label": " Meeting End Time  "
   }
  ],
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "is_submittable": 1,
  "links": [],
- "modified": "2025-09-10 09:57:22.866962",
+ "modified": "2025-09-23 15:37:08.025978",
  "modified_by": "Administrator",
  "module": "Bwm Custom",
  "name": "Visit Doctype",
+ "naming_rule": "Expression",
  "owner": "Administrator",
  "permissions": [
   {

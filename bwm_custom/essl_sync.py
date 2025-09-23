@@ -11,7 +11,13 @@
 # IN/OUT Enhancements:
 # - Auto IN/OUT (log_type) inference per employee per day (alternating)
 # - Backfill utility to fill log_type for already-inserted blank rows
-# - Settings toggle: essl_infer_log_type (defaults to ON)
+# - Settings toggles:
+#     * essl_infer_log_type (default ON)
+#     * essl_allow_duplicates (default OFF)
+#
+# IMPORTANT: This build is "Active-only":
+#            Only Employees with status == "Active" will be inserted.
+#            Others are counted as "skipped_inactive" (no toggle to override).
 
 import html
 import re
@@ -161,7 +167,7 @@ def _get_all_serials() -> list[str]:
 
     rows = _get_child_rows_or_none(doc)
     if rows:
-        vals = [ (r.get("serial_number") or "").strip() for r in rows if cint(r.get("enabled", 1)) ]
+        vals = [(r.get("serial_number") or "").strip() for r in rows if cint(r.get("enabled", 1))]
         return [v for v in vals if v]
 
     # fallback: CSV
@@ -325,6 +331,21 @@ def _map_employee(emp_code: str) -> str | None:
     return name  # could be None
 
 
+# ---- Employee status cache & check (Active-only) ----
+_EMP_ACTIVE_CACHE = {}
+
+def _is_employee_active(emp_name: str) -> bool:
+    """Return True if Employee.status == 'Active' (per-run cached)."""
+    if not emp_name:
+        return False
+    if emp_name in _EMP_ACTIVE_CACHE:
+        return _EMP_ACTIVE_CACHE[emp_name]
+    status = frappe.db.get_value("Employee", emp_name, "status")
+    active = (status == "Active")
+    _EMP_ACTIVE_CACHE[emp_name] = active
+    return active
+
+
 def _infer_log_type(emp: str, ts) -> str:
     """
     Decide IN/OUT by alternating punches for an employee per calendar day.
@@ -347,9 +368,15 @@ def _infer_log_type(emp: str, ts) -> str:
 
 
 def _insert_checkin(emp: str, ts, device_id="Biometrics"):
-    """Insert Employee Checkin with de-dup and auto log_type (IN/OUT)."""
+    """Insert Employee Checkin with de-dup and auto log_type (IN/OUT).
+       Only Active employees are allowed.
+    """
     if not emp or not ts:
         return "skipped_invalid", None
+
+    # --- Active-only guard ---
+    if not _is_employee_active(emp):
+        return "skipped_inactive", None
 
     # De-dup by (employee, time)
     allow_dups = cint(_conf("essl_allow_duplicates", 0))
@@ -399,7 +426,14 @@ def _sync_one_device(from_datetime: str, to_datetime: str, serial_number: str, p
         "to": to_datetime,
         "serial_number": serial,
         "preview": bool(preview),
-        "counts": {"fetched": len(raw_rows), "inserted": 0, "skipped_existing": 0, "skipped_invalid": 0, "unmatched": 0},
+        "counts": {
+            "fetched": len(raw_rows),
+            "inserted": 0,
+            "skipped_existing": 0,
+            "skipped_invalid": 0,
+            "unmatched": 0,
+            "skipped_inactive": 0,   # NEW bucket (Active-only enforcement)
+        },
         "unmatched": [],   # up to 50 examples of unmapped employees
         "examples": [],    # up to 10 inserted (or preview) rows
     }
@@ -425,7 +459,7 @@ def _sync_one_device(from_datetime: str, to_datetime: str, serial_number: str, p
                 out["examples"].append({"employee": emp, "time": str(ts)})
             continue
 
-        status, name = _insert_checkin(emp, ts, device_id=f"ESSL:{serial or 'UNKNOWN'}")
+        status, name = _insert_checkin(emp, ts, device_id=f"{serial or 'UNKNOWN'}")
         if status not in out["counts"]:
             out["counts"][status] = 0
         out["counts"][status] += 1
@@ -463,12 +497,19 @@ def sync_realtime_tick(overlap_seconds: int = 90, backfill_minutes_if_empty: int
         "to": to_dt,
         "preview": bool(cint(preview)),
         "devices": [],
-        "totals": {"fetched": 0, "inserted": 0, "skipped_existing": 0, "skipped_invalid": 0, "unmatched": 0},
+        "totals": {
+            "fetched": 0,
+            "inserted": 0,
+            "skipped_existing": 0,
+            "skipped_invalid": 0,
+            "unmatched": 0,
+            # (skipped_inactive per device; can be summed from devices if needed)
+        },
     }
 
     # Prevent overlapping runs (single lock for the whole batch)
     with frappe.cache().lock("essl_realtime_sync_lock", timeout=55):
-        for sn in serials or [""]:  # allow empty to support legacy single-device misconfig
+        for sn in (serials or [""]):  # allow empty to support legacy single-device misconfig
             try:
                 last = _get_last_cursor_for_serial(sn)
                 if last:
@@ -479,7 +520,7 @@ def sync_realtime_tick(overlap_seconds: int = 90, backfill_minutes_if_empty: int
 
                 dev_res = _sync_one_device(from_dt, to_dt, serial_number=sn, preview=preview)
 
-                # accumulate totals
+                # accumulate totals (only the standard buckets)
                 for k in out["totals"].keys():
                     out["totals"][k] += dev_res["counts"].get(k, 0)
 
@@ -510,7 +551,7 @@ def sync_last_n_days_transactions():
         to_dt = now.strftime("%Y-%m-%d %H:%M:%S")
         from_dt = (now - timedelta(days=max(1, n) - 1)).strftime("%Y-%m-%d 00:00:00")
 
-        for sn in _get_all_serials() or [""]:
+        for sn in (_get_all_serials() or [""]):
             try:
                 _sync_one_device(from_dt, to_dt, serial_number=sn, preview=0)
                 _set_last_cursor_for_serial(sn, to_dt)
