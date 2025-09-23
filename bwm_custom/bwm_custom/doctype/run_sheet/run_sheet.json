@@ -1,23 +1,23 @@
 {
  "actions": [],
  "allow_rename": 1,
+ "autoname": "format:RS-{####}",
  "creation": "2025-09-09 12:31:53.897808",
  "doctype": "DocType",
  "engine": "InnoDB",
  "field_order": [
   "section_break_hvkl",
   "employee",
+  "column_break_ldyk",
   "employee__name",
-  "odameter_start_km",
-  "odameter_end_km",
-  "column_break_nnyd",
-  "company",
-  "cost_center",
   "section_break_c1sf",
-  "create_visit",
+  "party_list",
   "visit_logs_section",
   "visit_history",
+  "section_break_cjae",
   "department",
+  "company",
+  "cost_center",
   "branch"
  ],
  "fields": [
@@ -45,31 +45,8 @@
    "options": "Company"
   },
   {
-   "fieldname": "column_break_nnyd",
-   "fieldtype": "Column Break"
-  },
-  {
    "fieldname": "section_break_c1sf",
    "fieldtype": "Section Break"
-  },
-  {
-   "bold": 1,
-   "columns": 4,
-   "fieldname": "create_visit",
-   "fieldtype": "Button",
-   "label": "Create Visit",
-   "max_height": "300 px",
-   "width": "1200 px"
-  },
-  {
-   "fieldname": "odameter_start_km",
-   "fieldtype": "Float",
-   "label": "Odameter Start Km"
-  },
-  {
-   "fieldname": "odameter_end_km",
-   "fieldtype": "Float",
-   "label": "Odameter End Km"
   },
   {
    "fieldname": "visit_logs_section",
@@ -99,15 +76,31 @@
    "fieldname": "branch",
    "fieldtype": "Data",
    "label": "Branch"
+  },
+  {
+   "fieldname": "section_break_cjae",
+   "fieldtype": "Section Break"
+  },
+  {
+   "bold": 1,
+   "fieldname": "party_list",
+   "fieldtype": "Table",
+   "label": "Party List",
+   "options": "Runsheet Party"
+  },
+  {
+   "fieldname": "column_break_ldyk",
+   "fieldtype": "Column Break"
   }
  ],
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2025-09-10 09:54:30.130628",
+ "modified": "2025-09-23 15:35:43.986373",
  "modified_by": "Administrator",
  "module": "Bwm Custom",
  "name": "Run Sheet",
+ "naming_rule": "Expression",
  "owner": "Administrator",
  "permissions": [
   {
