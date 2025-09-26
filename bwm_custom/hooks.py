@@ -164,7 +164,20 @@ doc_events = {
     },
     "Run Sheet":{
         "validate":"bwm_custom.bwm_custom.doctype.run_sheet.run_sheet.validate"
+    },
+    "Sales Order":{
+        "on_submit":"bwm_custom.status_updation.handle_so_submit",
+        "on_update_after_submit":"bwm_custom.status_updation.handle_so_submit"
+    },
+    "Material Request":{
+        "on_submit":"bwm_custom.status_updation.handle_mr_submitted",
+        "after_insert": "bwm_custom.status_updation.handle_mr_submitted"
+    },
+    "Purchase Order":{
+        "onsubmit":"bwm_custom.status_updation.handle_po_submitted",
+        "after_insert":"bwm_custom.status_updation.handle_po_submitted"
     }
+
 }
 
 
