@@ -296,16 +296,6 @@ fixtures = [
                 "Customer-custom_runsheet_tab"
             ]]
         ]
-    },
-
-    {
-        "doctype": "Server Script",
-        "filters": [
-            ["name", "in", [
-                "Essl Minutes wise",
-                "Employee check in - Biometrics"
-            ]]
-        ]
     }
 ]
 
