@@ -1,22 +1,24 @@
 // Client Script for: Visit Doctype
-// Path alternative (if file-based):
-// apps/bwm_custom/bwm_custom/bwm_custom/doctype/visit_doctype/visit_doctype.js
 
 frappe.ui.form.on("Visit Doctype", {
   refresh(frm) {
-    // 6-step flow (match EXACT fieldnames in your doctype)
+    // Steps WITHOUT waiting_end and check_out
     const STEPS = [
       { btn: "check_in",      ts: "check_in_time",      lat: "in_latitude",                   lon: "in_longitude" },
       { btn: "waiting_start", ts: "waiting_start_time", lat: "custom_waiting_start_latitude", lon: "custom_waiting_start_longitude" },
-      { btn: "wating_end",    ts: "waiting_end_time",   lat: "custom_waiting_end_latitude",   lon: "custom_waiting_end_longitude" },
+      // removed: { btn: "wating_end",  ts: "waiting_end_time",   lat: "custom_waiting_end_latitude",   lon: "custom_waiting_end_longitude" },
       { btn: "meeting_start", ts: "meeting_start_time", lat: "custom_meeting_start_latitude", lon: "custom_meeting_start_longitude" },
       { btn: "meeting_end",   ts: "meeting_end_time",   lat: "custom_meeting_end_latitude",   lon: "custom_meeting_end_longitude" },
-      { btn: "check_out",     ts: "check_out_time",     lat: "out_latitude",                  lon: "out_longitude" },
+      // removed: { btn: "check_out",   ts: "check_out_time",     lat: "out_latitude",                  lon: "out_longitude" },
     ];
 
     // ---- helpers: visibility
     function hide_all() {
       STEPS.forEach(s => frm.set_df_property(s.btn, "hidden", 1));
+      // Also permanently hide the removed buttons if they exist on the form:
+      ["wating_end", "check_out"].forEach(fn => {
+        if (frm.get_field(fn)) frm.set_df_property(fn, "hidden", 1);
+      });
     }
     function first_incomplete_index() {
       for (let i = 0; i < STEPS.length; i++) {
@@ -31,8 +33,8 @@ frappe.ui.form.on("Visit Doctype", {
     }
 
     // ---- helpers: time & geo
-    const nowDatetime = () => frappe.datetime.now_datetime(); // for Datetime fields
-    const todayDate   = () => frappe.datetime.get_today();    // for Date fields (dd-mm-yyyy safe)
+    const nowDatetime = () => frappe.datetime.now_datetime();
+    const todayDate   = () => frappe.datetime.get_today();
 
     function getGeo() {
       return new Promise(resolve => {
@@ -59,7 +61,7 @@ frappe.ui.form.on("Visit Doctype", {
         const ts_val = nowDatetime();
         await frm.set_value(step.ts, ts_val);
 
-        // 2) ensure visit_date is a proper Date (prevents invalid date error)
+        // 2) ensure visit_date is set
         if (!frm.doc.visit_date) {
           await frm.set_value("visit_date", todayDate());
         }
@@ -75,7 +77,7 @@ frappe.ui.form.on("Visit Doctype", {
         frappe.dom.freeze("Saving…");
         await frm.save();
 
-        // 5) reveal next button only
+        // 5) show next button only
         show_next_only();
 
       } catch (e) {
@@ -106,5 +108,12 @@ frappe.ui.form.on("Visit Doctype", {
 
     bind_clicks();
     show_next_only();
+
+    // Add “Open Run Sheet” action
+    if (frm.doc.run_sheet) {
+      frm.add_custom_button(__('Open Run Sheet'), function() {
+        frappe.set_route('Form', 'Run Sheet', frm.doc.run_sheet);
+      }, __('Actions'));
+    }
   },
 });
