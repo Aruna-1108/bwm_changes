@@ -293,7 +293,11 @@ fixtures = [
                 "Lead-custom_runsheet_reference",
                 "Lead-custom_runsheet_logs",
                 "Lead-custom_runsheet_logs",
-                "Customer-custom_runsheet_tab"
+                "Customer-custom_runsheet_tab",
+                "CRM Deal-custom_logs",
+                "CRM Deal-custom_runsheet_tab"
+
+
             ]]
         ]
     }

@@ -7,7 +7,12 @@
  "engine": "InnoDB",
  "field_order": [
   "section_break_q76i",
-  "visit_id"
+  "visit_id",
+  "party_name",
+  "outcome_of_visit",
+  "outcome_of_visit_copy",
+  "status",
+  "purpose_of_visit"
  ],
  "fields": [
   {
@@ -19,13 +24,39 @@
    "fieldtype": "Link",
    "label": "Visit Id",
    "options": "Visit Doctype"
+  },
+  {
+   "fieldname": "party_name",
+   "fieldtype": "Data",
+   "label": "Party Name"
+  },
+  {
+   "fieldname": "outcome_of_visit",
+   "fieldtype": "Data",
+   "label": "Outcome Of Visit"
+  },
+  {
+   "fieldname": "outcome_of_visit_copy",
+   "fieldtype": "Data",
+   "label": "Pre/Post Nesta"
+  },
+  {
+   "fieldname": "status",
+   "fieldtype": "Data",
+   "label": "Status",
+   "options": "\nSuccess\nFailure"
+  },
+  {
+   "fieldname": "purpose_of_visit",
+   "fieldtype": "Data",
+   "label": "Purpose of Visit"
   }
  ],
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "istable": 1,
  "links": [],
- "modified": "2025-09-09 15:10:15.656376",
+ "modified": "2025-09-27 11:35:31.844496",
  "modified_by": "Administrator",
  "module": "Bwm Custom",
  "name": "Run Sheet Logs",

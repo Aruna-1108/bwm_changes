@@ -1,43 +1,43 @@
 import frappe
 
-APPLICANT_EMAIL_FIELD = "employee_email_id"   # applicant email field
-APPROVER_FIELD        = "leave_approver"      # approver email field
+APPLICANT_EMAIL_FIELD = "employee_email_id"   # stores User ID
+APPROVER_FIELD        = "leave_approver"      # stores User ID
 
-def get_permission_query_conditions(user: str | None = None, doctype: str | None = None, **kwargs) -> str:
+HR_ROLES = {"HR Manager", "System Manager", "HR User"}
+
+def _sql_norm(expr: str) -> str:
+    # MariaDB/MySQL: robust case/space-insensitive compare
+    return f"LOWER(TRIM({expr}))"
+
+def get_permission_query_conditions(user: str | None = None,
+                                    doctype: str | None = None, **kwargs) -> str:
     """
-    Visibility rules for Permission Form:
-      - HR Manager / System Manager / HR User -> see all
-      - Everyone else (ESS, ESS Approver)     -> show if user is applicant OR approver
+    HR roles -> see all
+    Others   -> where applicant or approver (or owner, optional) equals current user id
     """
-    user = user or frappe.session.user
+    user = (user or frappe.session.user or "").strip()
     roles = set(frappe.get_roles(user))
+    if HR_ROLES & roles:
+        return ""
 
     table   = "`tabPermission Form`"
     user_sql = frappe.db.escape(user)
 
-    # HR roles: unrestricted
-    if {"HR Manager", "System Manager", "HR User"} & roles:
-        return ""
-
-    # For ESS + ESS Approver → show if either applicant or approver matches login email
     return f"""
-        ({table}.`{APPLICANT_EMAIL_FIELD}` = {user_sql}
-         OR {table}.`{APPROVER_FIELD}` = {user_sql})
+        {_sql_norm(f"{table}.`{APPLICANT_EMAIL_FIELD}`")} = LOWER(TRIM({user_sql}))
+        OR {_sql_norm(f"{table}.`{APPROVER_FIELD}`")}    = LOWER(TRIM({user_sql}))
+        OR {_sql_norm(f"{table}.`owner`")}               = LOWER(TRIM({user_sql}))  -- remove if you don't want owners
     """
-
 
 def has_permission(doc, ptype, user) -> bool:
-    """
-    Record-level check for Permission Form:
-      - HR roles: always True
-      - Others: only if employee_email_id == user OR approver == user
-    """
     roles = set(frappe.get_roles(user))
-
-    if {"HR Manager", "System Manager", "HR User"} & roles:
+    if HR_ROLES & roles:
         return True
 
-    applicant_email = getattr(doc, APPLICANT_EMAIL_FIELD, None)
-    approver_email  = getattr(doc, APPROVER_FIELD, None)
-
-    return (applicant_email == user) or (approver_email == user)
+    norm = lambda v: (v or "").strip().lower()
+    u = norm(user)
+    return (
+        norm(getattr(doc, APPLICANT_EMAIL_FIELD, None)) == u
+        or norm(getattr(doc, APPROVER_FIELD, None)) == u
+        or norm(getattr(doc, "owner", None)) == u      # remove if you don't want owners
+    )

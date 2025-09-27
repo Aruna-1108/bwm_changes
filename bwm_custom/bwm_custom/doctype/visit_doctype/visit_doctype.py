@@ -3,19 +3,28 @@
 import frappe
 from frappe.model.document import Document
 
+# Correct imports in ERPNext v15
+from frappe.contacts.doctype.address.address import (
+    get_default_address,
+    get_address_display,
+)
+from frappe.contacts.doctype.contact.contact import get_default_contact
 
-RUN_SHEET_TABLE_FIELD = "visit_history"                 # Table field on Run Sheet
-RUN_SHEET_CHILD_DTYPE = "Run Sheet Logs"                # Child doctype used in Run Sheet
+
+
+# ------------------------------- Config ---------------------------------------
+
+RUN_SHEET_TABLE_FIELD = "visit_history"          # Table field on Run Sheet
+RUN_SHEET_CHILD_DTYPE = "Run Sheet Logs"         # Child doctype used in Run Sheet
 
 CUSTOMER_TABLE_FIELD  = "custom_logs"            # Table field on Customer
-CUSTOMER_CHILD_DTYPE  = "Customer Visit Reference"      # Child doctype used in Customer
+CUSTOMER_CHILD_DTYPE  = "Customer Visit Reference"
 
-LEAD_TABLE_FIELD      = "custom_runsheet_logs"            # Table field on Lead (if used)
-LEAD_CHILD_DTYPE      = "Customer Visit Reference"      # same child doctype used on Lead
+LEAD_TABLE_FIELD      = "custom_runsheet_logs"   # Table field on Lead
+LEAD_CHILD_DTYPE      = "Customer Visit Reference"
 
-CRMDEAL_TABLE_FIELD   = "custom_logs"                 # Table field on CRM Deal
-CRMDEAL_CHILD_DTYPE   = "Customer Visit Reference"      # child doctype used on CRM Deal
-# ------------------------------------------------------------------
+CRMDEAL_TABLE_FIELD   = "custom_logs"            # Table field on CRM Deal
+CRMDEAL_CHILD_DTYPE   = "Customer Visit Reference"
 
 
 def _assert_child_table(parent_dt: str, table_field: str, expected_child_dt: str) -> None:
@@ -36,47 +45,203 @@ def _assert_child_table(parent_dt: str, table_field: str, expected_child_dt: str
         )
 
 
+def _compact(d: dict) -> dict:
+    """Return a shallow copy of d with empty/None values removed."""
+    return {k: v for k, v in (d or {}).items() if v not in (None, "", [], {})}
+
+def _auto_set_nesta(doc):
+    """Set custom_nesta from party_type.
+    Non Existing Customer -> Pre-Nesta, others -> Post-Nesta.
+    """
+    if not hasattr(doc, "custom_nesta"):
+        return
+
+    pt = (getattr(doc, "party_type", "") or "").strip()
+    if not pt:
+        # no party type; clear or leave as-is—choose one:
+        # doc.custom_nesta = ""
+        return
+
+    target = "Pre-Nesta" if pt == "Non Existing Customer" else "Post-Nesta"
+
+    # Only write if different to avoid needless DB writes
+    if (doc.custom_nesta or "").strip() != target:
+        doc.custom_nesta = target
+
+
+
+def _fill_visit_party_fields(doc: Document) -> None:
+    """
+    Server-side enrichment on Visit Doctype:
+    - party_address (HTML/text)
+    - mobile_number (from Contact; Lead fallback)
+    - lead_name (for Lead)
+    Safe: writes only if the field exists on doc.
+    """
+    party_type = getattr(doc, "party_type", None)
+    party      = getattr(doc, "party", None)
+    if not (party_type and party):
+        # Clear stale
+        if hasattr(doc, "party_address"):
+            doc.party_address = ""
+        if hasattr(doc, "mobile_number"):
+            doc.mobile_number = ""
+        if hasattr(doc, "lead_name"):
+            doc.lead_name = ""
+        return
+
+    # --- Address
+    addr_html = ""
+    addr_name = get_default_address(party_type, party)
+    if addr_name:
+        addr_html = get_address_display(addr_name) or ""
+
+    # --- Contact phone
+    phone = ""
+    contact_name = get_default_contact(party_type, party)
+    if contact_name:
+        cont = frappe.get_doc("Contact", contact_name)
+        phone = cont.mobile_no or cont.phone or ""
+        # check child table if needed
+        if not phone and getattr(cont, "phone_nos", None):
+            for ph in cont.phone_nos:
+                if getattr(ph, "phone", None):
+                    phone = ph.phone
+                    break
+
+    # --- Lead fallback
+    if party_type == "Lead" and not phone:
+        lead_vals = frappe.db.get_value("Lead", party, ["mobile_no", "phone"], as_dict=True)
+        if lead_vals:
+            phone = lead_vals.mobile_no or lead_vals.phone or ""
+
+    # --- lead_name
+    lead_name = ""
+    if party_type == "Lead":
+        lead_name = frappe.db.get_value("Lead", party, "lead_name") or ""
+
+    # --- write back if fields exist
+    if hasattr(doc, "party_address"):
+        doc.party_address = addr_html or ""
+    if hasattr(doc, "mobile_number"):
+        doc.mobile_number = phone or ""
+    if hasattr(doc, "lead_name"):
+        doc.lead_name = lead_name or ""
+
+
+def _runsheet_row_payload(doc: Document) -> dict:
+    """
+    Build the payload for Run Sheet Logs. Include many useful columns,
+    while tolerating missing fields on the child doctype (Frappe ignores unknown keys).
+    Adjust keys to match your child doctype fieldnames if needed.
+    """
+    return _compact({
+        "visit_id":            getattr(doc, "name", None),
+        "visit_date":          getattr(doc, "visit_date", None),
+
+        "party_type":          getattr(doc, "party_type", None),
+        "party":               getattr(doc, "party", None),
+        "party_name":          getattr(doc, "party", None),  # if child uses party_name
+
+        # Quick readouts for the manager
+        "purpose":             getattr(doc, "purpose", None),
+        "outcome":             getattr(doc, "outcome", None),
+
+        # Your custom “copy”/labels from Customize Form
+        "purpose_of_visit":        getattr(doc, "custom_purpose_of_visit", None),
+        "outcome_of_visit":        getattr(doc, "custom_outcome_of_the_visit", None),
+        "outcome_of_visit_copy":   getattr(doc, "custom_nesta", None),  # Pre/Post Nesta
+
+        # Party quick info (if you created fields on child)
+        "party_address":       getattr(doc, "party_address", None),
+        "phone_number":        getattr(doc, "mobile_number", None),
+
+        # Ownership context
+        "employee_id":         getattr(doc, "employee", None),
+        "runsheet_id":         getattr(doc, "run_sheet", None),
+
+        # Optional geo/timestamps if your child has them
+        "check_in_time":       getattr(doc, "check_in_time", None),
+        "check_out_time":      getattr(doc, "check_out_time", None),
+        "meeting_start_time":  getattr(doc, "meeting_start_time", None),
+        "meeting_end_time":    getattr(doc, "meeting_end_time", None),
+        "waiting_start_time":  getattr(doc, "waiting_start_time", None),
+        "waiting_end_time":    getattr(doc, "waiting_end_time", None),
+
+        "in_latitude":         getattr(doc, "in_latitude", None),
+        "in_longitude":        getattr(doc, "in_longitude", None),
+        "out_latitude":        getattr(doc, "out_latitude", None),
+        "out_longitude":       getattr(doc, "out_longitude", None),
+
+        # If you want to store your custom_runsheet_party_id (from Visit) on RS row:
+        "runsheet_party_id":   getattr(doc, "custom_runsheet_party_id", None),
+    })
+
+
+def _account_row_payload(doc: Document) -> dict:
+    """
+    Payload for Customer/Lead/CRM Deal child logs (“Customer Visit Reference”).
+    Keep keys aligned to that child doctype for best UX; unknown keys are ignored.
+    """
+    employee_name = (
+        frappe.db.get_value("Employee", doc.employee, "employee_name")
+        if getattr(doc, "employee", None) else None
+    )
+    return _compact({
+        "visit_id":       getattr(doc, "name", None),
+        "visit_date":     getattr(doc, "visit_date", None),
+        "purpose":        getattr(doc, "purpose", None),
+        "outcome":        getattr(doc, "outcome", None),
+
+        # Mirror the custom labels too, if your child has them
+        "purpose_of_visit":      getattr(doc, "custom_purpose_of_visit", None),
+        "outcome_of_visit":      getattr(doc, "custom_outcome_of_the_visit", None),
+        "nesta_stage":           getattr(doc, "custom_nesta", None),
+
+        # Owner context
+        "employee_id":    getattr(doc, "employee", None),
+        "employee_name":  employee_name,
+        "runsheet_id":    getattr(doc, "run_sheet", None),
+    })
+
+
+# ------------------------------- Docclass -------------------------------------
+
 class VisitDoctype(Document):
+    def validate(self):
+        # Auto-fill address/phone/lead_name on the Visit itself
+        _fill_visit_party_fields(self)
+        _auto_set_nesta(self)
+    
+    
+
     def on_submit(self):
         """On submit, append references to Run Sheet and (conditionally) Customer/Lead/CRM Deal."""
         # 1) Run Sheet
         if getattr(self, "run_sheet", None):
             _assert_child_table("Run Sheet", RUN_SHEET_TABLE_FIELD, RUN_SHEET_CHILD_DTYPE)
             rs = frappe.get_doc("Run Sheet", self.run_sheet)
-            rs.append(RUN_SHEET_TABLE_FIELD, {"visit_id": self.name})
+            rs.append(RUN_SHEET_TABLE_FIELD, _runsheet_row_payload(self))
             rs.save(ignore_permissions=True)
 
-        # Common values
-        employee_name = (
-            frappe.db.get_value("Employee", self.employee, "employee_name")
-            if getattr(self, "employee", None)
-            else None
-        )
-        payload = {
-            "employee_id": self.employee,
-            "employee_name": employee_name,
-            "purpose_of_visit": getattr(self, "purpose", None),
-            "visit_date": getattr(self, "visit_date", None),
-            "outcome_of_visit": getattr(self, "outcome", None),
-            "runsheet_id": getattr(self, "run_sheet", None),
-            "visit_id": getattr(self, "name", None),
-        }
+        # 2) Account objects
+        payload = _account_row_payload(self)
 
-        # 2) Customer
+        # Customer
         if getattr(self, "party_type", None) == "Customer" and getattr(self, "party", None):
             _assert_child_table("Customer", CUSTOMER_TABLE_FIELD, CUSTOMER_CHILD_DTYPE)
             cust = frappe.get_doc("Customer", self.party)
             cust.append(CUSTOMER_TABLE_FIELD, payload)
             cust.save(ignore_permissions=True)
 
-        # 3) Lead
+        # Lead
         if getattr(self, "party_type", None) == "Lead" and getattr(self, "party", None):
             _assert_child_table("Lead", LEAD_TABLE_FIELD, LEAD_CHILD_DTYPE)
             lead = frappe.get_doc("Lead", self.party)
             lead.append(LEAD_TABLE_FIELD, payload)
             lead.save(ignore_permissions=True)
 
-        # 4) CRM Deal
+        # CRM Deal
         if getattr(self, "party_type", None) == "CRM Deal" and getattr(self, "party", None):
             _assert_child_table("CRM Deal", CRMDEAL_TABLE_FIELD, CRMDEAL_CHILD_DTYPE)
             deal = frappe.get_doc("CRM Deal", self.party)
@@ -87,7 +252,7 @@ class VisitDoctype(Document):
 
     def on_cancel(self):
         """On cancel, remove the references we added on submit."""
-        # Run Sheet
+        # Remove RS rows by visit_id (simple, robust)
         if getattr(self, "run_sheet", None):
             rs = frappe.get_doc("Run Sheet", self.run_sheet)
             rows = rs.get(RUN_SHEET_TABLE_FIELD) or []
@@ -97,13 +262,15 @@ class VisitDoctype(Document):
             )
             rs.save(ignore_permissions=True)
 
-        # Match function for child rows in Customer/Lead/CRM Deal
+        # Match for account rows (child doctype may not store visit_id only)
         def _same_row(r):
             return (
-                getattr(r, "visit_date", None) == getattr(self, "visit_date", None)
-                and getattr(r, "runsheet_id", None) == getattr(self, "run_sheet", None)
-                and getattr(r, "employee_id", None) == getattr(self, "employee", None)
-                and getattr(r, "visit_id", None) == getattr(self, "name", None)
+                getattr(r, "visit_id", None) == getattr(self, "name", None)
+                or (
+                    getattr(r, "visit_date", None) == getattr(self, "visit_date", None)
+                    and getattr(r, "runsheet_id", None) == getattr(self, "run_sheet", None)
+                    and getattr(r, "employee_id", None) == getattr(self, "employee", None)
+                )
             )
 
         # Customer
