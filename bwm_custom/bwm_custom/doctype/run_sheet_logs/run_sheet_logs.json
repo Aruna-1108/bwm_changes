@@ -57,18 +57,19 @@
    "label": "Purpose of Visit"
   },
   {
+   "allow_on_submit": 1,
    "fieldname": "visit_results",
    "fieldtype": "Select",
    "in_list_view": 1,
    "label": "Visit Results",
-   "options": "\nSuccess\nFailure"
+   "options": "\nSuccess\nFailure\nPending"
   }
  ],
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "istable": 1,
  "links": [],
- "modified": "2025-09-29 10:06:50.134521",
+ "modified": "2025-09-29 16:25:48.336411",
  "modified_by": "Administrator",
  "module": "Bwm Custom",
  "name": "Run Sheet Logs",
