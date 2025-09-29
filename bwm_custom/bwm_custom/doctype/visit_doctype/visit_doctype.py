@@ -138,6 +138,7 @@ def _runsheet_row_payload(doc: Document) -> dict:
     return _compact({
         "visit_id":            getattr(doc, "name", None),
         "visit_date":          getattr(doc, "visit_date", None),
+        "status":              getattr(doc,"custom_status",None),
 
         "party_type":          getattr(doc, "party_type", None),
         "party":               getattr(doc, "party", None),
