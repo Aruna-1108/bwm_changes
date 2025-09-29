@@ -12,6 +12,20 @@ frappe.ui.form.on("Visit Doctype", {
       // removed: { btn: "check_out",   ts: "check_out_time",     lat: "out_latitude",                  lon: "out_longitude" },
     ];
 
+    // -------- validation: require party or party_name before any action
+    const has_party = () => {
+      // adjust these fieldnames if your doctype uses different ones
+      return Boolean((frm.doc.party && String(frm.doc.party).trim()) ||
+                     (frm.doc.party_name && String(frm.doc.party_name).trim()));
+    };
+
+    function show_party_required() {
+      frappe.show_alert(
+        { message: __("Select Party or enter Party Name before proceeding."), indicator: "orange" },
+        5
+      );
+    }
+
     // ---- helpers: visibility
     function hide_all() {
       STEPS.forEach(s => frm.set_df_property(s.btn, "hidden", 1));
@@ -28,8 +42,17 @@ frappe.ui.form.on("Visit Doctype", {
     }
     function show_next_only() {
       hide_all();
-      const i = first_incomplete_index();
-      if (i !== -1) frm.set_df_property(STEPS[i].btn, "hidden", 0);
+      const idx = first_incomplete_index();
+      if (idx === -1) return;
+
+      // Gate by party presence
+      const fieldname = STEPS[idx].btn;
+      if (!has_party()) {
+        // keep the next button hidden until party is set
+        frm.set_df_property(fieldname, "hidden", 1);
+      } else {
+        frm.set_df_property(fieldname, "hidden", 0);
+      }
     }
 
     // ---- helpers: time & geo
@@ -51,6 +74,12 @@ frappe.ui.form.on("Visit Doctype", {
     }
 
     async function stamp_and_save(step, $btn) {
+      // Final guard before action
+      if (!has_party()) {
+        show_party_required();
+        return;
+      }
+
       if (frm.__visit_saving__) return;
       frm.__visit_saving__ = true;
 
@@ -105,6 +134,13 @@ frappe.ui.form.on("Visit Doctype", {
         }
       });
     }
+
+    // Recompute visibility when party fields change
+    ["party", "party_name", "party_type"].forEach(fn => {
+      if (frm.fields_dict[fn]) {
+        frm.fields_dict[fn].df.onchange = () => show_next_only();
+      }
+    });
 
     bind_clicks();
     show_next_only();

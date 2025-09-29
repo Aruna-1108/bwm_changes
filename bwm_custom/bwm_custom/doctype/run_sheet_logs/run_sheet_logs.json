@@ -12,6 +12,7 @@
   "outcome_of_visit",
   "outcome_of_visit_copy",
   "status",
+  "visit_results",
   "purpose_of_visit"
  ],
  "fields": [
@@ -22,17 +23,20 @@
   {
    "fieldname": "visit_id",
    "fieldtype": "Link",
+   "in_list_view": 1,
    "label": "Visit Id",
    "options": "Visit Doctype"
   },
   {
    "fieldname": "party_name",
    "fieldtype": "Data",
+   "in_list_view": 1,
    "label": "Party Name"
   },
   {
    "fieldname": "outcome_of_visit",
    "fieldtype": "Data",
+   "in_list_view": 1,
    "label": "Outcome Of Visit"
   },
   {
@@ -42,21 +46,30 @@
   },
   {
    "fieldname": "status",
-   "fieldtype": "Data",
-   "label": "Status",
-   "options": "\nSuccess\nFailure"
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Visit Status",
+   "options": "\nCompleted\nPending"
   },
   {
    "fieldname": "purpose_of_visit",
    "fieldtype": "Data",
    "label": "Purpose of Visit"
+  },
+  {
+   "allow_on_submit": 1,
+   "fieldname": "visit_results",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Visit Results",
+   "options": "\nSuccess\nFailure\nPending"
   }
  ],
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "istable": 1,
  "links": [],
- "modified": "2025-09-27 11:35:31.844496",
+ "modified": "2025-09-29 16:25:48.336411",
  "modified_by": "Administrator",
  "module": "Bwm Custom",
  "name": "Run Sheet Logs",
