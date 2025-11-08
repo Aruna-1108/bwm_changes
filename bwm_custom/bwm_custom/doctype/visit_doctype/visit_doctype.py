@@ -149,9 +149,10 @@ def _runsheet_row_payload(doc: Document) -> dict:
         "outcome":             getattr(doc, "outcome", None),
 
         # Your custom “copy”/labels from Customize Form
-        "purpose_of_visit":        getattr(doc, "custom_purpose_of_visit", None),
-        "outcome_of_visit":        getattr(doc, "custom_outcome_of_the_visit", None),
-        "outcome_of_visit_copy":   getattr(doc, "custom_nesta", None),  # Pre/Post Nesta
+        "purpose_of_visit":        getattr(doc, "purpose__of_visit", None),
+        "outcome_of_visit":        getattr(doc, "outcome_of_visit", None),
+        "outcome_of_visit_copy":   getattr(doc, "custom_nesta", None),
+        "follow_up_date":          getattr(doc,"follow_up_date",None),
 
         # Party quick info (if you created fields on child)
         "party_address":       getattr(doc, "party_address", None),
@@ -195,8 +196,8 @@ def _account_row_payload(doc: Document) -> dict:
         "outcome":        getattr(doc, "outcome", None),
 
         # Mirror the custom labels too, if your child has them
-        "purpose_of_visit":      getattr(doc, "custom_purpose_of_visit", None),
-        "outcome_of_visit":      getattr(doc, "custom_outcome_of_the_visit", None),
+        "purpose_of_visit":      getattr(doc, "purpose__of_visit", None),
+        "outcome_of_visit":      getattr(doc, "outcome_of_visit", None),
         "nesta_stage":           getattr(doc, "custom_nesta", None),
 
         # Owner context

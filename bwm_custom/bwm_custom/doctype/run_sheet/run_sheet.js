@@ -20,7 +20,7 @@ frappe.ui.form.on("Runsheet Party", {
             phone: row.phone_number,
             custom_runsheet_party_id: row.name,
             run_sheet: row.parent,
-            custom_purpose_of_visit: row.purpose__of_visit
+            purpose__of_visit: row.purpose__of_visit
         });
     }
 });

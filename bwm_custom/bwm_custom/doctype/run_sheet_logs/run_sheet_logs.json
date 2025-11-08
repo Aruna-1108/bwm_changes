@@ -13,7 +13,8 @@
   "outcome_of_visit_copy",
   "status",
   "visit_results",
-  "purpose_of_visit"
+  "purpose_of_visit",
+  "follow_up_date"
  ],
  "fields": [
   {
@@ -35,9 +36,10 @@
   },
   {
    "fieldname": "outcome_of_visit",
-   "fieldtype": "Data",
+   "fieldtype": "Select",
    "in_list_view": 1,
-   "label": "Outcome Of Visit"
+   "label": "Outcome Of Visit",
+   "options": "\nCompleted\nFollow-up\nRescheduled\nNo-show\nNot Interested"
   },
   {
    "fieldname": "outcome_of_visit_copy",
@@ -53,8 +55,9 @@
   },
   {
    "fieldname": "purpose_of_visit",
-   "fieldtype": "Data",
-   "label": "Purpose of Visit"
+   "fieldtype": "Select",
+   "label": "Purpose of Visit",
+   "options": "\nNew Lead Introduction\nRequirement / Spec Finalization\nQuote / Price Discussion\nOrder / Reorder\nPayment Follow-up\nQuality Complaint / Inspection (RCA)\nTechnical Site Support\nAdmin / KYC / Documents\nOthers"
   },
   {
    "allow_on_submit": 1,
@@ -63,13 +66,18 @@
    "in_list_view": 1,
    "label": "Visit Results",
    "options": "\nSuccess\nFailure\nPending"
+  },
+  {
+   "fieldname": "follow_up_date",
+   "fieldtype": "Date",
+   "label": "Follow Up Date"
   }
  ],
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "istable": 1,
  "links": [],
- "modified": "2025-09-29 16:25:48.336411",
+ "modified": "2025-11-08 15:31:37.875869",
  "modified_by": "Administrator",
  "module": "Bwm Custom",
  "name": "Run Sheet Logs",

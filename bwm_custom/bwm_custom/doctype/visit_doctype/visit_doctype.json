@@ -16,7 +16,8 @@
   "party_address",
   "mobile_number",
   "follow_up_date",
-  "custom_outcome_of_the_visit",
+  "purpose__of_visit",
+  "outcome_of_visit",
   "section_break_0uwx",
   "column_break_cmic",
   "check_in",
@@ -301,22 +302,29 @@
    "label": " Meeting End Time  "
   },
   {
+   "depends_on": "eval:doc.outcome_of_visit === \"Follow-up\"\r\n",
    "fieldname": "follow_up_date",
    "fieldtype": "Date",
    "label": "Follow up Date"
   },
   {
-   "fieldname": "custom_outcome_of_the_visit",
+   "fieldname": "outcome_of_visit",
    "fieldtype": "Select",
    "label": "Outcome of Visit",
    "options": "\nCompleted\nFollow-up\nRescheduled\nNo-show\nNot Interested"
+  },
+  {
+   "fieldname": "purpose__of_visit",
+   "fieldtype": "Select",
+   "label": "Purpose  of Visit",
+   "options": "\nNew Lead Introduction\nRequirement / Spec Finalization\nQuote / Price Discussion\nOrder / Reorder\nPayment Follow-up\nQuality Complaint / Inspection (RCA)\nTechnical Site Support\nAdmin / KYC / Documents\nOthers"
   }
  ],
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "is_submittable": 1,
  "links": [],
- "modified": "2025-11-08 12:31:10.882025",
+ "modified": "2025-11-08 15:07:42.141573",
  "modified_by": "Administrator",
  "module": "Bwm Custom",
  "name": "Visit Doctype",
