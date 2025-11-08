@@ -16,6 +16,7 @@
   "party_address",
   "mobile_number",
   "follow_up_date",
+  "custom_outcome_of_the_visit",
   "section_break_0uwx",
   "column_break_cmic",
   "check_in",
@@ -303,13 +304,19 @@
    "fieldname": "follow_up_date",
    "fieldtype": "Date",
    "label": "Follow up Date"
+  },
+  {
+   "fieldname": "custom_outcome_of_the_visit",
+   "fieldtype": "Select",
+   "label": "Outcome of Visit",
+   "options": "\nCompleted\nFollow-up\nRescheduled\nNo-show\nNot Interested"
   }
  ],
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "is_submittable": 1,
  "links": [],
- "modified": "2025-11-08 11:38:56.331665",
+ "modified": "2025-11-08 12:31:10.882025",
  "modified_by": "Administrator",
  "module": "Bwm Custom",
  "name": "Visit Doctype",
