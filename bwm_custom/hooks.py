@@ -295,7 +295,8 @@ fixtures = [
                 "Lead-custom_runsheet_logs",
                 "Customer-custom_runsheet_tab",
                 "CRM Deal-custom_logs",
-                "CRM Deal-custom_runsheet_tab"
+                "CRM Deal-custom_runsheet_tab",
+                "Visit Doctype-custom_outcome_of_the_visit"
 
 
             ]]
