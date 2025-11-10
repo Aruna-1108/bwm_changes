@@ -8,6 +8,7 @@
  "field_order": [
   "party_type",
   "party",
+  "non_existing_customer",
   "phone_number",
   "lead_name",
   "column_break_icrm",
@@ -49,9 +50,9 @@
    "label": "Phone Number"
   },
   {
+   "depends_on": "eval:doc.party_type != 'Non Existing Customer'",
    "fieldname": "party",
    "fieldtype": "Dynamic Link",
-   "in_list_view": 1,
    "label": "Party",
    "options": "party_type"
   },
@@ -66,13 +67,19 @@
    "fieldname": "lead_name",
    "fieldtype": "Data",
    "label": "Lead Name"
+  },
+  {
+   "depends_on": "eval:doc.party_type === 'Non Existing Customer'",
+   "fieldname": "non_existing_customer",
+   "fieldtype": "Data",
+   "label": "Non Existing Customer"
   }
  ],
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "istable": 1,
  "links": [],
- "modified": "2025-11-08 11:33:19.384381",
+ "modified": "2025-11-10 17:10:50.545376",
  "modified_by": "Administrator",
  "module": "Bwm Custom",
  "name": "Runsheet Party",
