@@ -2,10 +2,11 @@ frappe.ui.form.on("Runsheet Party", {
     visit: function(frm, cdt, cdn) {
         let row = locals[cdt][cdn];
 
-        if (!row.party) {
-            frappe.msgprint("Please select a Party before visiting.");
-            return;
+        if (!row.party && row.party_type !== "Non Existing Customer") {
+        frappe.msgprint("Please select a Party before visiting.");
+        return;
         }
+
 
         if (!frm.doc.employee) {
             frappe.msgprint("Please set Employee on the Run Sheet first.");
@@ -15,6 +16,7 @@ frappe.ui.form.on("Runsheet Party", {
         frappe.new_doc("Visit Doctype", {
             employee: frm.doc.employee,
             party_type: row.party_type,
+            non_existing_customer:row.non_existing_customer,
             party: row.party,
             party_address: row.address,
             phone: row.phone_number,

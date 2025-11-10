@@ -153,6 +153,7 @@ def _runsheet_row_payload(doc: Document) -> dict:
         "outcome_of_visit":        getattr(doc, "outcome_of_visit", None),
         "outcome_of_visit_copy":   getattr(doc, "custom_nesta", None),
         "follow_up_date":          getattr(doc,"follow_up_date",None),
+        "non_existing_customer":   getattr(doc,"non_existing_customer",None),
 
         # Party quick info (if you created fields on child)
         "party_address":       getattr(doc, "party_address", None),

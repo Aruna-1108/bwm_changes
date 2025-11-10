@@ -23,7 +23,8 @@
   "active",
   "rol",
   "roq",
-  "moq",
+  "final_rol",
+  "final_roq",
   "last_3_month_sales_qty",
   "daily_requirement"
  ],
@@ -100,24 +101,21 @@
   {
    "fieldname": "window__days",
    "fieldtype": "Float",
-   "label": "Window  Days"
+   "hidden": 1,
+   "label": "Review Cycle Days",
+   "read_only": 1
   },
   {
    "fieldname": "rol",
    "fieldtype": "Float",
-   "label": "ROL",
+   "label": " Recommended ROL",
    "read_only": 1
   },
   {
    "fieldname": "roq",
    "fieldtype": "Float",
-   "label": "ROQ",
+   "label": "Recommended ROQ(Enter Coverage Days)",
    "read_only": 1
-  },
-  {
-   "fieldname": "moq",
-   "fieldtype": "Data",
-   "label": "MOQ"
   },
   {
    "default": "0",
@@ -152,12 +150,22 @@
    "fieldtype": "Float",
    "label": "Lead Days",
    "read_only": 1
+  },
+  {
+   "fieldname": "final_rol",
+   "fieldtype": "Float",
+   "label": "Final ROL"
+  },
+  {
+   "fieldname": "final_roq",
+   "fieldtype": "Float",
+   "label": "Final ROQ"
   }
  ],
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2025-11-10 11:33:59.221242",
+ "modified": "2025-11-10 17:41:14.207701",
  "modified_by": "Administrator",
  "module": "Bwm Custom",
  "name": "Item Planning Policy",

@@ -13,6 +13,7 @@
   "phone",
   "column_break_2lnw",
   "party",
+  "non_existing_customer",
   "party_address",
   "mobile_number",
   "follow_up_date",
@@ -318,13 +319,18 @@
    "fieldtype": "Select",
    "label": "Purpose  of Visit",
    "options": "\nNew Lead Introduction\nRequirement / Spec Finalization\nQuote / Price Discussion\nOrder / Reorder\nPayment Follow-up\nQuality Complaint / Inspection (RCA)\nTechnical Site Support\nAdmin / KYC / Documents\nOthers"
+  },
+  {
+   "fieldname": "non_existing_customer",
+   "fieldtype": "Data",
+   "label": "Non Existing Customer"
   }
  ],
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "is_submittable": 1,
  "links": [],
- "modified": "2025-11-08 15:07:42.141573",
+ "modified": "2025-11-10 17:29:53.163608",
  "modified_by": "Administrator",
  "module": "Bwm Custom",
  "name": "Visit Doctype",

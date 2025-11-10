@@ -14,7 +14,8 @@
   "status",
   "visit_results",
   "purpose_of_visit",
-  "follow_up_date"
+  "follow_up_date",
+  "non_existing_customer"
  ],
  "fields": [
   {
@@ -71,13 +72,18 @@
    "fieldname": "follow_up_date",
    "fieldtype": "Date",
    "label": "Follow Up Date"
+  },
+  {
+   "fieldname": "non_existing_customer",
+   "fieldtype": "Data",
+   "label": "Non Existing Customer"
   }
  ],
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "istable": 1,
  "links": [],
- "modified": "2025-11-08 15:31:37.875869",
+ "modified": "2025-11-10 17:36:42.856874",
  "modified_by": "Administrator",
  "module": "Bwm Custom",
  "name": "Run Sheet Logs",
