@@ -343,7 +343,7 @@ class ItemPlanningPolicy(Document):
         if not val:
             return (0.0, 0.0)
         avg_lt = float(val[0][0] or 0.0)
-        sd_lt  = float(val[0][1] or 0.0)
+        sd_lt = float(val[0][1] or 0.0)
         return (avg_lt, sd_lt)
 
     def _get_z_value(self, item_code: str, cost_center: str) -> float:
@@ -406,98 +406,112 @@ class ItemPlanningPolicy(Document):
 @frappe.whitelist()
 def apply_item_reorder_from_policy(policy_name: str):
     """
-    Upsert Item Reorder on Item based on Item Planning Policy.
+    Upsert Item → Auto-reorder row.
 
-    UPDATE only if existing row has:
-      - SAME warehouse AND
-      - SAME warehouse_group AND
-      - ROL or ROQ changed
+    Uniqueness rule (ERPNext core): ONE row per (warehouse, material_request_type)
 
-    Else INSERT a new row.
-
-    Returns: {"item": <item>, "op": "updated"|"inserted"|"no_change"}
+    Behavior:
+      - Match EXISTING row by (warehouse, MR type)  ← ignore group for matching
+      - If none, but there is EXACTLY ONE row for the same warehouse (legacy blank/diff MR),
+        treat that as the target row
+      - Update ROL/ROQ/MR type and also write warehouse_group
+      - If multiple duplicates exist for same (WH, MR), keep first, delete extras
     """
     if not policy_name:
         frappe.throw("Policy name is required")
 
     policy = frappe.get_doc("Item Planning Policy", policy_name)
 
-    # --- button-click validations (server-side safety) ---
+    # validations
     missing = []
-    if not (policy.item or "").strip():                     missing.append("Item")
-    if not (policy.request_for_warehouse or "").strip():    missing.append("Request for Warehouse")
-    if not (policy.check_in_groups or "").strip():          missing.append("Check in (group)")
-    if not (policy.material_request_type or "").strip():    missing.append("Material Request Type")
-    if policy.rol in (None, ""):                            missing.append("Re-order Level (ROL)")
-    if not (policy.roq or policy.minimum_inventory_qty):    missing.append("Re-order Qty (ROQ) or Minimum Inventory Qty")
+    if not (policy.item or "").strip():
+        missing.append("Item")
+    if not (policy.request_for_warehouse or "").strip():
+        missing.append("Request for Warehouse")
+    if not (policy.material_request_type or "").strip():
+        missing.append("Material Request Type")
+    if policy.rol in (None, ""):
+        missing.append("Re-order Level (ROL)")
+    if not (policy.roq or policy.minimum_inventory_qty):
+        missing.append("Re-order Qty (ROQ) or Minimum Inventory Qty")
     if missing:
         frappe.throw("Please enter: <b>{}</b>".format(", ".join(missing)))
 
-    # --- mapping ---
+    # map
     item_code = (policy.item or "").strip()
-    wh        = (policy.request_for_warehouse or "").strip()
-    wh_group  = (policy.check_in_groups or "").strip() or None
-    mr_type   = (policy.material_request_type or "").strip() or "Purchase"
-    rol       = float(policy.rol or 0)
+    wh = (policy.request_for_warehouse or "").strip()
+    wh_group = (getattr(policy, "check_in_groups", None) or "").strip() or None  # optional
+    mr_type = (policy.material_request_type or "Purchase").strip()
+    rol = float(policy.rol or 0)
+    roq = float((policy.roq if policy.roq not in (None, "") else policy.minimum_inventory_qty) or 0)
 
-    roq_val = policy.roq
-    if roq_val is None or roq_val == "":
-        roq = float(policy.minimum_inventory_qty or 0)
-    else:
-        roq = float(roq_val or 0)
-
-    # --- load item & permissions ---
+    # load item
     item = frappe.get_doc("Item", item_code)
     if not frappe.has_permission("Item", ptype="write", doc=item):
         frappe.throw(f"You do not have permission to update Item {item_code}")
 
-    child_fieldname = "reorder_levels"
+    rows = list(item.get("reorder_levels") or [])
 
-    # --- robust matching helpers ---
     def norm(s: Optional[str]) -> str:
         return (s or "").strip().casefold()
 
-    wh_norm       = norm(wh)
-    wh_group_norm = norm(wh_group)
+    wh_n, mr_n = norm(wh), norm(mr_type)
 
-    # ---- find existing row with SAME warehouse AND SAME warehouse_group ----
-    existing = None
-    for row in (item.get(child_fieldname) or []):
-        if norm(row.warehouse) == wh_norm and norm(getattr(row, "warehouse_group", None)) == wh_group_norm:
-            existing = row
-            break
+    # 1) strict match by (warehouse, MR type)
+    matches = [
+        r for r in rows
+        if norm(getattr(r, "warehouse", None)) == wh_n
+        and norm(getattr(r, "material_request_type", "Purchase")) == mr_n
+    ]
 
-    # helper: compare floats (avoid tiny rounding diffs)
+    # 2) fallback: warehouse-only, when it identifies exactly one legacy row
+    if not matches:
+        by_wh = [r for r in rows if norm(getattr(r, "warehouse", None)) == wh_n]
+        if len(by_wh) == 1:
+            matches = by_wh
+
     EPS = 1e-9
+
     def changed(a, b) -> bool:
-        a = float(a or 0)
-        b = float(b or 0)
-        return abs(a - b) > EPS
+        return abs(float(a or 0) - float(b or 0)) > EPS
 
-    if existing:
-        # Adjust fieldnames to your child doctype fields if different
-        rol_changed = changed(getattr(existing, "warehouse_reorder_level", 0), rol)
-        roq_changed = changed(getattr(existing, "warehouse_reorder_qty", 0),   roq)
+    op = "no_change"
 
-        if rol_changed or roq_changed:
-            existing.warehouse_reorder_level = rol
-            existing.warehouse_reorder_qty   = roq
-            existing.material_request_type   = mr_type
-            # keys already match → do not change warehouse/group here
+    if matches:
+        keep = matches[0]
+        extras = matches[1:]  # duplicates by our key
+
+        rol_changed = changed(getattr(keep, "warehouse_reorder_level", 0), rol)
+        roq_changed = changed(getattr(keep, "warehouse_reorder_qty", 0), roq)
+        mr_changed = (norm(getattr(keep, "material_request_type", "")) != mr_n)
+        grp_changed = (norm(getattr(keep, "warehouse_group", None)) != norm(wh_group))
+
+        if rol_changed or roq_changed or mr_changed or grp_changed:
+            keep.warehouse_reorder_level = rol
+            keep.warehouse_reorder_qty = roq
+            keep.material_request_type = mr_type
+            if hasattr(keep, "warehouse_group"):
+                keep.warehouse_group = wh_group
             op = "updated"
-        else:
-            op = "no_change"
+
+        # remove duplicates that violate (WH, MR) uniqueness
+        for extra in extras:
+            if norm(getattr(extra, "warehouse", None)) == wh_n and \
+               norm(getattr(extra, "material_request_type", "")) == mr_n:
+                item.get("reorder_levels").remove(extra)
+                if op == "no_change":
+                    op = "cleaned_duplicates"
     else:
-        # No matching row → INSERT
-        new_row = item.append(child_fieldname, {})
-        new_row.warehouse               = wh
-        new_row.warehouse_group         = wh_group or None
+        # no match → insert a fresh row
+        new_row = item.append("reorder_levels", {})
+        new_row.warehouse = wh
+        if hasattr(new_row, "warehouse_group"):
+            new_row.warehouse_group = wh_group or None
         new_row.warehouse_reorder_level = rol
-        new_row.warehouse_reorder_qty   = roq
-        new_row.material_request_type   = mr_type
+        new_row.warehouse_reorder_qty = roq
+        new_row.material_request_type = mr_type
         op = "inserted"
 
     item.save(ignore_permissions=False)
     frappe.db.commit()
-
     return {"item": item_code, "op": op}
