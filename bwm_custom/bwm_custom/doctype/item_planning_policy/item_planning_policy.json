@@ -1,0 +1,183 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "creation": "2025-11-09 11:49:38.022337",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "company",
+  "item",
+  "cost_center",
+  "column_break_oiet",
+  "strategy",
+  "request_for_warehouse",
+  "check_in_groups",
+  "material_request_type",
+  "section_break_w6gl",
+  "safety_days",
+  "coverage_days",
+  "window__days",
+  "lead_days",
+  "minimum_inventory_qty",
+  "column_break_fhae",
+  "active",
+  "rol",
+  "roq",
+  "moq",
+  "last_3_month_sales_qty",
+  "daily_requirement"
+ ],
+ "fields": [
+  {
+   "fieldname": "item",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Item",
+   "options": "Item",
+   "reqd": 1
+  },
+  {
+   "fieldname": "company",
+   "fieldtype": "Link",
+   "label": "Company",
+   "options": "Company",
+   "remember_last_selected_value": 1
+  },
+  {
+   "fieldname": "cost_center",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Cost Center",
+   "options": "Cost Center",
+   "reqd": 1
+  },
+  {
+   "fieldname": "column_break_oiet",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "strategy",
+   "fieldtype": "Select",
+   "label": "Strategy",
+   "options": "\nMTO\nMTS"
+  },
+  {
+   "fieldname": "request_for_warehouse",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Request for Warehouse",
+   "link_filters": "[[\"Warehouse\", \"is_group\", \"=\", 0]] ",
+   "options": "Warehouse",
+   "reqd": 1
+  },
+  {
+   "fieldname": "check_in_groups",
+   "fieldtype": "Link",
+   "label": "Check in Groups",
+   "link_filters": "[[\"Warehouse\", \"is_group\", \"=\", 1]] ",
+   "options": "Warehouse"
+  },
+  {
+   "fieldname": "material_request_type",
+   "fieldtype": "Select",
+   "label": "Material Request Type",
+   "options": "\nPurchase\nTransfer\nMaterial Issue\nManufacture"
+  },
+  {
+   "fieldname": "section_break_w6gl",
+   "fieldtype": "Section Break"
+  },
+  {
+   "fieldname": "safety_days",
+   "fieldtype": "Float",
+   "label": "Safety Days"
+  },
+  {
+   "fieldname": "coverage_days",
+   "fieldtype": "Float",
+   "label": "Coverage Days"
+  },
+  {
+   "fieldname": "window__days",
+   "fieldtype": "Float",
+   "label": "Window  Days"
+  },
+  {
+   "fieldname": "rol",
+   "fieldtype": "Float",
+   "label": "ROL",
+   "read_only": 1
+  },
+  {
+   "fieldname": "roq",
+   "fieldtype": "Float",
+   "label": "ROQ",
+   "read_only": 1
+  },
+  {
+   "fieldname": "moq",
+   "fieldtype": "Data",
+   "label": "MOQ"
+  },
+  {
+   "default": "0",
+   "fieldname": "active",
+   "fieldtype": "Check",
+   "label": "Active"
+  },
+  {
+   "fieldname": "column_break_fhae",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "last_3_month_sales_qty",
+   "fieldtype": "Float",
+   "label": "Last 3 Month Sales Qty",
+   "read_only": 1
+  },
+  {
+   "fieldname": "daily_requirement",
+   "fieldtype": "Float",
+   "label": "Daily Requirement(ADD)",
+   "read_only": 1
+  },
+  {
+   "fieldname": "minimum_inventory_qty",
+   "fieldtype": "Float",
+   "label": "Minimum Inventory Qty",
+   "read_only": 1
+  },
+  {
+   "fieldname": "lead_days",
+   "fieldtype": "Float",
+   "label": "Lead Days",
+   "read_only": 1
+  }
+ ],
+ "grid_page_length": 50,
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2025-11-10 11:33:59.221242",
+ "modified_by": "Administrator",
+ "module": "Bwm Custom",
+ "name": "Item Planning Policy",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "row_format": "Dynamic",
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}
