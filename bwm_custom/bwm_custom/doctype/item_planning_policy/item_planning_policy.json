@@ -10,23 +10,30 @@
   "cost_center",
   "column_break_oiet",
   "strategy",
-  "request_for_warehouse",
-  "check_in_groups",
-  "material_request_type",
+  "coverage_days",
   "section_break_w6gl",
   "safety_days",
-  "coverage_days",
   "window__days",
   "lead_days",
+  "lead_time_average",
+  "p50",
+  "p80",
   "minimum_inventory_qty",
   "column_break_fhae",
   "active",
+  "item_classification",
+  "policy_recommendation",
   "rol",
   "roq",
+  "last_3_month_sales_qty",
+  "daily_requirement",
+  "auto_reorders_section",
   "final_rol",
   "final_roq",
-  "last_3_month_sales_qty",
-  "daily_requirement"
+  "column_break_wjsr",
+  "check_in_groups",
+  "material_request_type",
+  "request_for_warehouse"
  ],
  "fields": [
   {
@@ -68,8 +75,7 @@
    "in_list_view": 1,
    "label": "Request for Warehouse",
    "link_filters": "[[\"Warehouse\", \"is_group\", \"=\", 0]] ",
-   "options": "Warehouse",
-   "reqd": 1
+   "options": "Warehouse"
   },
   {
    "fieldname": "check_in_groups",
@@ -161,12 +167,51 @@
    "fieldname": "final_roq",
    "fieldtype": "Float",
    "label": "Final ROQ"
+  },
+  {
+   "fieldname": "auto_reorders_section",
+   "fieldtype": "Section Break",
+   "label": "Auto Reorders"
+  },
+  {
+   "fieldname": "column_break_wjsr",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "lead_time_average",
+   "fieldtype": "Float",
+   "label": "Lead Time Average",
+   "read_only": 1
+  },
+  {
+   "fieldname": "p50",
+   "fieldtype": "Float",
+   "label": "P-50",
+   "read_only": 1
+  },
+  {
+   "fieldname": "p80",
+   "fieldtype": "Float",
+   "label": "P-80 ",
+   "read_only": 1
+  },
+  {
+   "fieldname": "item_classification",
+   "fieldtype": "Select",
+   "label": "Item Classification",
+   "options": "\nA1\nA2\nB1\nB2\nC"
+  },
+  {
+   "fieldname": "policy_recommendation",
+   "fieldtype": "Select",
+   "label": "Policy Recommendation",
+   "options": "\nMTS\nMTS - Lite"
   }
  ],
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2025-11-11 09:45:27.937801",
+ "modified": "2025-11-11 11:31:06.646028",
  "modified_by": "Administrator",
  "module": "Bwm Custom",
  "name": "Item Planning Policy",

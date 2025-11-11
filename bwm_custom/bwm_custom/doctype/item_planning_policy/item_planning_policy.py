@@ -16,18 +16,22 @@ class ItemPlanningPolicy(Document):
         Auto-calc on Save (no blocking validation here):
           1) Last-3-Months Sales Qty
           2) Monthly & Daily Requirements
-          3) Lead Days (MEDIAN PO->PR)  ← must run before ROL timing
+          3) Lead Days selection (A1/A2 -> P-80, else P-50)
           4) Safety Days (statistical)
           5) Minimum Inventory Qty
-          6) ROL (uses lead_days + safety_days)
+          6) ROL (uses selected lead_days + safety_days)
           7) ROQ
         """
         last3 = self.compute_last3_sales_qty()
-        daily = self.compute_requirements(last3)         # returns daily
-        self.compute_lead_days()                         # sets self.lead_days (median)
-        self.compute_safety_days()                       # sets self.safety_days
+        daily = self.compute_requirements(last3)          # returns daily
+
+        # Compute percentiles & avg, then choose lead_days by item_classification
+        self.compute_p50_lead_days()                      # fills p50, p80, lead_time_average; sets lead_days=P-50
+        self.select_lead_days()                           # overwrite lead_days per A1/A2 rule
+
+        self.compute_safety_days()                        # sets self.safety_days
         self.compute_minimum_inventory_qty(daily)
-        self.compute_rol(daily)                          # uses self.lead_days + self.safety_days
+        self.compute_rol(daily)                           # always re-selects lead_days internally (robust)
         self.compute_roq(daily)
 
     # ---------- 1) SALES (last 3 months) ----------
@@ -40,7 +44,7 @@ class ItemPlanningPolicy(Document):
 
         company: Optional[str] = getattr(self, "company", None)
         cost_center: Optional[str] = getattr(self, "cost_center", None)
-        warehouse: Optional[str] = getattr(self, "request_for_warehouse", None)
+        # warehouse = getattr(self, "request_for_warehouse", None)  # not used
 
         from_date = add_months(getdate(today()), -3)
         to_date = getdate(today())
@@ -62,9 +66,6 @@ class ItemPlanningPolicy(Document):
         if cost_center:
             sql += " AND COALESCE(si.cost_center, sii.cost_center) = %s"
             params.append(cost_center)
-        if warehouse:
-            sql += " AND sii.warehouse = %s"
-            params.append(warehouse)
 
         qty = frappe.db.sql(sql, params)
         last3 = float(qty[0][0]) if qty else 0.0
@@ -80,7 +81,8 @@ class ItemPlanningPolicy(Document):
         self.daily_requirement = round(daily, ROUND_PLACES)
         return daily
 
-    # ---------- 3) LEAD DAYS (MEDIAN PO -> PR) ----------
+    # ---------- 3) LEAD DAYS (legacy median PO -> PR) ----------
+    # (Kept for completeness; validate() uses the percentile path instead.)
     def compute_lead_days(self) -> float:
         """
         Lead Days = MEDIAN of (PR.posting_date - PO.transaction_date) in days.
@@ -106,7 +108,6 @@ class ItemPlanningPolicy(Document):
             "cost_center": cost_center,
         }
 
-        # Pull raw lead-times as a vector (PO -> first PR for that PO item)
         sql = """
             SELECT
                 GREATEST(0, DATEDIFF(fr.first_receipt_date, po.transaction_date)) AS lt_days
@@ -150,16 +151,128 @@ class ItemPlanningPolicy(Document):
             })
             return 0.0
 
-        # Median
         n = len(vec)
         mid = n // 2
-        if n % 2:
-            median_val = vec[mid]
-        else:
-            median_val = (vec[mid - 1] + vec[mid]) / 2.0
-
+        median_val = vec[mid] if n % 2 else (vec[mid - 1] + vec[mid]) / 2.0
         self.lead_days = round(median_val, 2)
         return self.lead_days
+
+    # -------------------- 3.1 P-50, P-80, Average lead day ------------------------
+    def compute_p50_lead_days(self) -> float:
+        """
+        Computes percentile stats for lead time (PO -> first PR) and writes:
+          - self.lead_days         = P-50 (median)  [temporary; selector may overwrite]
+          - self.p50_lead_days     = P-50           (if field exists)
+          - self.p50               = P-50           (if field exists)
+          - self.p80               = P-80           (if field exists)
+          - self.lead_time_average = average days   (if field exists)
+        Returns P-50 for backward compatibility.
+        """
+        def percentile_nearest_rank(sorted_vec, q: float) -> float:
+            n = len(sorted_vec)
+            if n == 0:
+                return 0.0
+            if n == 1:
+                return float(sorted_vec[0])
+            rank = max(1, math.ceil((q / 100.0) * n))
+            return float(sorted_vec[rank - 1])
+
+        item_code = (getattr(self, "item", None) or "").strip()
+        company = (getattr(self, "company", None) or "").strip()
+        warehouse = (getattr(self, "request_for_warehouse", None) or "").strip() or None
+        cost_center = (getattr(self, "cost_center", None) or "").strip() or None
+
+        def _reset_targets():
+            for f in ("lead_days", "p50_lead_days", "p50", "p80", "lead_time_average"):
+                if hasattr(self, f):
+                    setattr(self, f, 0.0)
+
+        if not item_code or not company:
+            _reset_targets()
+            return 0.0
+
+        params = {
+            "item_code": item_code,
+            "company": company,
+            "warehouse": warehouse,
+            "cost_center": cost_center,
+        }
+
+        sql = """
+            SELECT
+                GREATEST(0, DATEDIFF(fr.first_receipt_date, po.transaction_date)) AS lt_days
+            FROM `tabPurchase Order Item` poi
+            JOIN `tabPurchase Order` po
+                 ON po.name = poi.parent AND po.docstatus = 1
+            JOIN (
+                SELECT
+                    pri.purchase_order_item,
+                    MIN(pr.posting_date) AS first_receipt_date
+                FROM `tabPurchase Receipt Item` pri
+                JOIN `tabPurchase Receipt` pr
+                     ON pr.name = pri.parent AND pr.docstatus = 1
+                WHERE pr.posting_date IS NOT NULL
+                GROUP BY pri.purchase_order_item
+            ) fr ON fr.purchase_order_item = poi.name
+            JOIN `tabPurchase Receipt Item` pri2
+                 ON pri2.purchase_order_item = poi.name
+            JOIN `tabPurchase Receipt` pr2
+                 ON pr2.name = pri2.parent AND pr2.docstatus = 1
+            WHERE
+                poi.item_code = %(item_code)s
+                AND pr2.company = %(company)s
+                AND (%(warehouse)s   IS NULL OR pri2.warehouse = %(warehouse)s)
+                AND (%(cost_center)s IS NULL OR COALESCE(poi.cost_center, pri2.cost_center) = %(cost_center)s)
+                AND po.transaction_date IS NOT NULL
+                AND fr.first_receipt_date IS NOT NULL
+                AND DATEDIFF(fr.first_receipt_date, po.transaction_date) >= 0
+        """
+        rows = frappe.db.sql(sql, params) or []
+        vec = sorted(float(r[0]) for r in rows if r and r[0] is not None)
+
+        if not vec:
+            _reset_targets()
+            return 0.0
+
+        # Percentiles + average
+        p50 = round(percentile_nearest_rank(vec, 50.0), 2)
+        p80 = round(percentile_nearest_rank(vec, 80.0), 2)
+        avg = round(sum(vec) / len(vec), 2)
+
+        # Default to P-50 for now (selector may overwrite this)
+        self.lead_days = p50
+
+        # Write fields if present
+        if hasattr(self, "p50_lead_days"):
+            self.p50_lead_days = p50
+        if hasattr(self, "p50"):
+            self.p50 = p50
+        if hasattr(self, "p80"):
+            self.p80 = p80
+        if hasattr(self, "lead_time_average"):
+            self.lead_time_average = avg
+
+        return p50
+
+    def _selected_lead_days(self) -> float:
+        """
+        Returns the lead-days to use based on item_classification:
+          - A1/A2  -> P-80 (if available), else P-50, else current lead_days, else 0
+          - Others -> P-50 (if available), else current lead_days, else 0
+        """
+        ic  = (getattr(self, "item_classification", "") or "").strip().upper()
+        p50 = float(getattr(self, "p50", getattr(self, "p50_lead_days", 0)) or 0)
+        p80 = float(getattr(self, "p80", 0) or 0)
+        current = float(getattr(self, "lead_days", 0) or 0)
+
+        if ic in ("A1", "A2"):
+            return p80 if p80 > 0 else (p50 if p50 > 0 else current)
+        else:
+            return p50 if p50 > 0 else (current if current > 0 else 0.0)
+
+    def select_lead_days(self):
+        """Write the chosen lead_days to the doc (A1/A2 -> P-80, else P-50)."""
+        self.lead_days = self._selected_lead_days()
 
     # ---------- 4) SAFETY DAYS (statistical) ----------
     def compute_safety_days(self) -> float:
@@ -218,10 +331,6 @@ class ItemPlanningPolicy(Document):
         # Safety Days = SS / E[D]
         safety_days = safety_stock_units / add_per_day if add_per_day > 0 else 0.0
         self.safety_days = round(safety_days, 2)
-
-        # Optional debug fields on DocType (uncomment if you add fields):
-        # self.safety_stock_units = round(safety_stock_units, ROUND_PLACES)
-        # self.sigma_during_lt_units = round(sigma_dlt_units, ROUND_PLACES)
 
         return self.safety_days
 
@@ -382,11 +491,12 @@ class ItemPlanningPolicy(Document):
     def compute_rol(self, daily: float):
         """
         ROL = (Safety Days + Lead Days) × Daily Requirement
-        (Lead Days here is the MEDIAN computed above, for robust timing)
+        Lead Days chosen dynamically by item_classification (A1/A2 -> P-80; else -> P-50).
         """
-        safety_days = getattr(self, "safety_days", 0) or 0
-        lead_days = getattr(self, "lead_days", 0) or 0
-        daily = daily or 0
+        safety_days = float(getattr(self, "safety_days", 0) or 0)
+        lead_days   = self._selected_lead_days()     # robust even if called directly
+        daily       = float(daily or 0)
+
         rol_qty = (safety_days + lead_days) * daily
         self.rol = round(rol_qty, ROUND_PLACES)
 
@@ -523,4 +633,3 @@ def apply_item_reorder_from_policy(policy_name: str):
     item.save(ignore_permissions=False)
     frappe.db.commit()
     return {"item": item_code, "op": op}
-	
