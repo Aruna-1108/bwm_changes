@@ -91,7 +91,8 @@
   {
    "fieldname": "safety_days",
    "fieldtype": "Float",
-   "label": "Safety Days"
+   "label": "Safety Days",
+   "read_only": 1
   },
   {
    "fieldname": "coverage_days",
@@ -165,7 +166,7 @@
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2025-11-10 17:41:14.207701",
+ "modified": "2025-11-11 09:45:27.937801",
  "modified_by": "Administrator",
  "module": "Bwm Custom",
  "name": "Item Planning Policy",

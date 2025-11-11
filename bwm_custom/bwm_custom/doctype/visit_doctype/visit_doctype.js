@@ -12,16 +12,20 @@ frappe.ui.form.on("Visit Doctype", {
       // removed: { btn: "check_out",   ts: "check_out_time",     lat: "out_latitude",                  lon: "out_longitude" },
     ];
 
-    // -------- validation: require party or party_name before any action
+    // -------- validation: relaxed for Non Existing Customer
     const has_party = () => {
-      // adjust these fieldnames if your doctype uses different ones
-      return Boolean((frm.doc.party && String(frm.doc.party).trim()) ||
-                     (frm.doc.party_name && String(frm.doc.party_name).trim()));
+      const pt = (frm.doc.party_type || "").trim();
+      if (pt === "Non Existing Customer") {
+        // No party or party_name required
+        return true;
+      }
+      // For all other types, Party (Link) is required
+      return Boolean(frm.doc.party && String(frm.doc.party).trim());
     };
 
     function show_party_required() {
       frappe.show_alert(
-        { message: __("Select Party or enter Party Name before proceeding."), indicator: "orange" },
+        { message: __("Select a Party to proceed."), indicator: "orange" },
         5
       );
     }
@@ -30,7 +34,7 @@ frappe.ui.form.on("Visit Doctype", {
     function hide_all() {
       STEPS.forEach(s => frm.set_df_property(s.btn, "hidden", 1));
       // Also permanently hide the removed buttons if they exist on the form:
-      ["wating_end", "check_out"].forEach(fn => {
+      ["waiting_end", "wating_end", "check_out"].forEach(fn => {
         if (frm.get_field(fn)) frm.set_df_property(fn, "hidden", 1);
       });
     }
@@ -48,7 +52,7 @@ frappe.ui.form.on("Visit Doctype", {
       // Gate by party presence
       const fieldname = STEPS[idx].btn;
       if (!has_party()) {
-        // keep the next button hidden until party is set
+        // keep the next button hidden until requirement is met
         frm.set_df_property(fieldname, "hidden", 1);
       } else {
         frm.set_df_property(fieldname, "hidden", 0);
