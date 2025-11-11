@@ -750,7 +750,7 @@
    "name": "Visit Doctype-custom_status",
    "no_copy": 0,
    "non_negative": 0,
-   "options": "\nCompleted\nDelayed",
+   "options": "\nCompleted\nPending",
    "owner": "Administrator",
    "permlevel": 0,
    "placeholder": null,
