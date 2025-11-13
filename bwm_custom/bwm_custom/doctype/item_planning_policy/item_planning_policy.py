@@ -18,7 +18,7 @@ class ItemPlanningPolicy(Document):
           1) Last-3-Months Sales Qty
           2) Monthly & Daily Requirements
           3) Lead Days selection (A1/A2 -> P-80, else P-50)
-          4) Safety Days (statistical)
+          4) Safety Days (statistical; B2 rule, ignore σL)
           5) Minimum Inventory Qty
           6) ROL (uses selected lead_days + safety_days)
           7) ROQ
@@ -34,7 +34,7 @@ class ItemPlanningPolicy(Document):
         self.compute_p50_lead_days()
         self._fetch_and_assign_item_classification()
 
-        # XYZ & FSN metrics
+        # XYZ & FSN metrics (T12-based)
         self.compute_xyz_classification()
         self._t12_customer_invoice_fsn()
 
@@ -86,7 +86,7 @@ class ItemPlanningPolicy(Document):
         self._class_value = cls.upper() if cls else ""
         return cls
 
-    # -------------------- XYZ Classification --------------------
+    # -------------------- XYZ Classification (T12) --------------------
     def compute_xyz_classification(self) -> Tuple[str, Optional[float]]:
         item_code = (getattr(self, "item", "") or "").strip()
         cost_center = (getattr(self, "cost_center", "") or "").strip()
@@ -152,14 +152,14 @@ class ItemPlanningPolicy(Document):
 
         return (xyz, cv)
 
-    # --------------------- FSN Logic (F / S / N) ----------------------
+    # --------------------- FSN Logic + CUSTOMERS (T12) ----------------------
     def _t12_customer_invoice_fsn(self) -> Tuple[int, int, int, str]:
         """
-        Last 12 months KPIs:
-          - customers_t12
-          - invoices_t12
-          - active_months_12
-          - fsn_logic  → F (>=9) , S (4–8) , N (<=3)
+        Last 12 months KPIs (T12 window):
+          - customers_t12   = distinct customers in last 12 months
+          - invoices_t12    = distinct invoices in last 12 months
+          - active_months_12= months in T12 where qty >= 1
+          - fsn_logic       → F (>=9) , S (4–8) , N (<=3)
         """
         item_code = (getattr(self, "item", "") or "").strip()
         cost_center = (getattr(self, "cost_center", "") or "").strip()
@@ -171,7 +171,7 @@ class ItemPlanningPolicy(Document):
         from_date = add_months(getdate(today()), -12)
         to_date = getdate(today())
 
-        # Distinct customers
+        # Distinct customers in T12
         sql_cust = """
             SELECT COUNT(DISTINCT si.customer)
             FROM `tabSales Invoice Item` sii
@@ -184,7 +184,7 @@ class ItemPlanningPolicy(Document):
         """
         customers_t12 = int(frappe.db.sql(sql_cust, (item_code, cost_center, from_date, to_date))[0][0] or 0)
 
-        # Distinct invoices
+        # Distinct invoices in T12
         sql_inv = """
             SELECT COUNT(DISTINCT si.name)
             FROM `tabSales Invoice Item` sii
@@ -196,7 +196,7 @@ class ItemPlanningPolicy(Document):
         """
         invoices_t12 = int(frappe.db.sql(sql_inv, (item_code, cost_center, from_date, to_date))[0][0] or 0)
 
-        # Active months
+        # Active months in T12
         sql_months = """
             SELECT COUNT(*) FROM (
               SELECT DATE_FORMAT(si.posting_date, '%%Y-%%m') AS ym, SUM(sii.qty) AS m_qty
@@ -213,7 +213,7 @@ class ItemPlanningPolicy(Document):
         res = frappe.db.sql(sql_months, (item_code, cost_center, from_date, to_date))
         active_months_12 = int((res[0][0] if res else 0) or 0)
 
-        # FSN class
+        # FSN class based on active months in T12
         if active_months_12 >= 9:
             fsn_logic = "F"
         elif 4 <= active_months_12 <= 8:
@@ -235,8 +235,13 @@ class ItemPlanningPolicy(Document):
     # -------------------- Policy Recommendation (MTS / MTS-Lite / MTO) --------------------
     def compute_policy_recommendation(self) -> str:
         """
+        Exactly aligned with SQL policy_pick:
+
         MTS:
-          abc_fine ∈ {A1, A2} AND xyz_class = 'X' AND fsn_class ∈ {F, S} AND customers_t12 ≥ 2
+          abc_fine ∈ {A1, A2}
+          AND xyz_class = 'X'
+          AND fsn_class ∈ {F, S}
+          AND customers_t12 ≥ 2
 
         MTS-Lite:
           abc_fine ∈ {A1, A2} AND (
@@ -250,8 +255,8 @@ class ItemPlanningPolicy(Document):
         abc_fine = (getattr(self, "abc_fine", None) or getattr(self, "item_classification", "") or "").strip().upper()
         xyz = (getattr(self, "xyz_classifications", "") or "").strip().upper()
         fsn = (getattr(self, "fsn_logic", "") or "").strip().upper()
-        customers = int(getattr(self, "customers_t12", 0) or 0)
-        active_m = int(getattr(self, "active_months_12", 0) or 0)
+        customers = int(getattr(self, "customers_t12", 0) or 0)      # T12-based
+        active_m = int(getattr(self, "active_months_12", 0) or 0)    # T12-based
         cv = getattr(self, "cv_t12", None)
         try:
             cv = float(cv) if cv is not None else None
@@ -261,13 +266,18 @@ class ItemPlanningPolicy(Document):
         is_A12 = abc_fine in {"A1", "A2"}
         fsn_good = fsn in {"F", "S"}
 
-        # MTS gate
+        # MTS gate (same as query)
         if is_A12 and xyz == "X" and fsn_good and customers >= 2:
             rec = "MTS"
         else:
-            # MTS-Lite gates
+            # MTS-Lite gates (same as query)
             cond_main = (is_A12 and (xyz in {"X", "Y"}) and fsn_good and customers >= 2)
-            cond_override = (abc_fine == "A1" and (cv is not None and cv <= 1.75) and customers >= 5 and active_m >= 6)
+            cond_override = (
+                abc_fine == "A1"
+                and (cv is not None and cv <= 1.75)
+                and customers >= 5
+                and active_m >= 6
+            )
             rec = "MTS-Lite" if (cond_main or cond_override) else "MTO"
 
         if hasattr(self, "policy_recommendation"):
@@ -281,7 +291,6 @@ class ItemPlanningPolicy(Document):
           - MTS       : 40
           - MTS-Lite  : 20
           - else (MTO): 0
-        Writes self.coverage_days if field exists. Returns the int days used.
         """
         rec = (getattr(self, "policy_recommendation", "") or "").strip().upper()
         if rec == "MTS":
@@ -513,18 +522,18 @@ class ItemPlanningPolicy(Document):
         """Write the chosen lead_days to the doc (A1/A2 -> P-80, else P-50)."""
         self.lead_days = self._selected_lead_days()
 
-    # ---------- Safety Days (UPDATED: B2 rule, ignore σL) ----------
+    # ---------- Safety Days (B2 rule, ignore σL) ----------
     def compute_safety_days(self) -> float:
         """
         B2 rule (ignore lead-time variability):
           SafetyDays = ( Z * sigma_daily * sqrt(L) ) / ADD
 
         Where:
-          ADD = average daily demand from weekly issues (Sales Invoice + Delivery Note)
+          ADD         = average daily demand from weekly issues (Sales Invoice + Delivery Note)
           sigma_daily = stdev of weekly issues / sqrt(7)
-          L = selected lead days:
-                A1/A2 → P80; others → P50; if 0 then fallback lead_time_average; else 45
-          Z = service factor by classification (_tier/_class)
+          L           = selected lead days:
+                          A1/A2 → P80; others → P50; if 0 then fallback lead_time_average; else 45
+          Z           = service factor by classification (_tier/_class)
         """
         item_code = (getattr(self, "item", None) or "").strip()
         company = (getattr(self, "company", None) or "").strip()
