@@ -19,16 +19,16 @@ class ItemPlanningPolicy(Document):
           2) Monthly & Daily Requirements  (INFORMATION ONLY; NOT used for ROL/ROQ)
           3) Lead Days selection (A1/A2 -> P-80, else P-50)
           4) Safety Days (statistical; B2 rule, ignore σL)
-          5) Minimum Inventory Qty  (= SafetyDays × ADD from T12 logic)
-          6) ROL (uses selected lead_days + safety_stock_units from T12 logic)
-          7) ROQ (= coverage_days × ADD from T12 logic)
+          5) Minimum Inventory Qty  (= SafetyDays × ADD from T12/weekly logic)
+          6) ROL (uses selected lead_days + safety_stock_units from T12/weekly logic)
+          7) ROQ (= coverage_days × ADD from T12/weekly logic)
           8) XYZ Classification (T12 variability)
           9) FSN logic (F/S/N from active months in T12)
          10) Policy recommendation (MTS / MTS-Lite / MTO) → Coverage Days
         """
         # Demand base (last-3-months, purely informational)
         last3 = self.compute_last3_sales_qty()
-        daily_last3 = self.compute_requirements(last3)  # returns daily for display
+        daily_last3 = self.compute_requirements(last3)  # returns daily for display only
 
         # Lead-time stats & item class cache
         self.compute_p50_lead_days()
@@ -40,14 +40,14 @@ class ItemPlanningPolicy(Document):
 
         # Downstream calcs using lead-days + demand stats (T12 / weekly)
         self.select_lead_days()
-        self.compute_safety_days()  # sets safety_days AND _effective_add_per_day
-        self.compute_minimum_inventory_qty(daily_last3)  # will internally use effective ADD if available
-        self.compute_rol(daily_last3)                    # will internally use effective ADD if available
+        self.compute_safety_days()          # sets safety_days AND _effective_add_per_day
+        self.compute_minimum_inventory_qty(daily_last3)  # uses effective ADD if available
+        self.compute_rol(daily_last3)                    # uses effective ADD if available
 
         # Policy → Coverage → ROQ
         self.compute_policy_recommendation()
         self.apply_coverage_from_policy()
-        self.compute_roq(daily_last3)                    # will internally use effective ADD if available
+        self.compute_roq(daily_last3)                    # uses effective ADD if available
 
     # -------------------- Helpers to fetch classification from Bucket Branch Detail --------------------
     def _fetch_item_classification_row(self, item_code: str, cost_center: str):
@@ -536,11 +536,12 @@ class ItemPlanningPolicy(Document):
         Where (aligned with SQL):
 
           If XYZ = 'X':
-            ADD_eff    = units_365d / 365
-            sigma_daily_eff = sd_m_qty / sqrt(365 / 12)
+            ADD_eff          = units_365d / 365
+            sigma_daily_eff  = sd_m_qty / sqrt(365 / 12)
           Else (Y/Z):
             ADD_eff, sigma_daily_eff from weekly issues (Sales Invoice + Delivery Note)
-              over ~52 weeks (≈ 365 days).
+            over ~52 weeks (≈ 365 days), aggregated ONLY by Item + Cost Center
+            (no warehouse filter).
 
           L   = selected lead days:
                   A1/A2 → P80; others → P50; if 0 then fallback lead_time_average; else 45
@@ -554,7 +555,6 @@ class ItemPlanningPolicy(Document):
         item_code = (getattr(self, "item", None) or "").strip()
         company = (getattr(self, "company", None) or "").strip()
         cost_center = (getattr(self, "cost_center", None) or "").strip()
-        warehouse = (getattr(self, "request_for_warehouse", None) or "").strip() or None
 
         # reset effective stats
         self._effective_add_per_day = 0.0
@@ -582,13 +582,13 @@ class ItemPlanningPolicy(Document):
                 sigma_daily_eff = sd_m / math.sqrt(365.0 / 12.0)
             self._demand_source = "MONTHLY"
         else:
-            # WEEKLY-based demand (same as demand_stats in SQL)
+            # WEEKLY-based demand (same as demand_stats in SQL),
+            # ONLY by Item + Cost Center (no warehouse filter)
             weeks_back = int(getattr(self, "weeks_back", 52) or 52)  # ≈ 1 year
             add_per_day_eff, sigma_daily_eff = self._get_demand_stats(
                 item_code=item_code,
                 cost_center=cost_center,
                 weeks_back=weeks_back,
-                warehouse=warehouse,
             )
             self._demand_source = "WEEKLY"
 
@@ -624,13 +624,17 @@ class ItemPlanningPolicy(Document):
         item_code: str,
         cost_center: str,
         weeks_back: int,
-        warehouse: Optional[str] = None
     ) -> Tuple[float, float]:
         """
         Returns (E[D] add_per_day, σD sigma_daily) from weekly issues
-        (Sales Invoice Items + Delivery Note Items).
+        (Sales Invoice Items + Delivery Note Items),
+        AGGREGATED ONLY BY Item + Cost Center (NO warehouse filter).
         """
-        params = {"item_code": item_code, "cc": cost_center, "weeks": weeks_back, "warehouse": warehouse}
+        params = {
+            "item_code": item_code,
+            "cc": cost_center,
+            "weeks": weeks_back,
+        }
 
         si_sql = """
             SELECT
@@ -642,8 +646,8 @@ class ItemPlanningPolicy(Document):
               AND sii.item_code = %(item_code)s
               AND si.posting_date >= DATE_SUB(CURDATE(), INTERVAL %(weeks)s WEEK)
               AND si.posting_date <  DATE_ADD(CURDATE(), INTERVAL 1 DAY)
-              AND (COALESCE(si.cost_center, sii.cost_center) = %(cc)s)
-              AND (%(warehouse)s IS NULL OR sii.warehouse = %(warehouse)s)
+              AND COALESCE(si.cost_center, sii.cost_center) = %(cc)s
+            GROUP BY week_start
         """
 
         dn_sql = """
@@ -656,8 +660,8 @@ class ItemPlanningPolicy(Document):
               AND dni.item_code = %(item_code)s
               AND dn.posting_date >= DATE_SUB(CURDATE(), INTERVAL %(weeks)s WEEK)
               AND dn.posting_date <  DATE_ADD(CURDATE(), INTERVAL 1 DAY)
-              AND (COALESCE(dn.cost_center, dni.cost_center) = %(cc)s)
-              AND (%(warehouse)s IS NULL OR dni.warehouse = %(warehouse)s)
+              AND COALESCE(dn.cost_center, dni.cost_center) = %(cc)s
+            GROUP BY week_start
         """
 
         # Average & stdev across weekly buckets
@@ -754,7 +758,7 @@ class ItemPlanningPolicy(Document):
         """
         Minimum Inventory Qty = Safety Days × Daily Requirement.
 
-        BUT to match the SQL, Daily Requirement here must be the same ADD used
+        To match the SQL, Daily Requirement here must be the same ADD used
         for safety_days (effective ADD). So:
 
           if _effective_add_per_day > 0:
