@@ -321,7 +321,7 @@ class ItemPlanningPolicy(Document):
                 and customers >= 5
                 and active_m >= 6
             )
-            rec = "MTS-Lite" if (cond_main or cond_override) else "MTO"
+            rec = "MTS - Lite" if (cond_main or cond_override) else "MTO"
 
         if hasattr(self, "policy_recommendation"):
             self.policy_recommendation = rec
@@ -338,8 +338,9 @@ class ItemPlanningPolicy(Document):
         rec = (getattr(self, "policy_recommendation", "") or "").strip().upper()
         if rec == "MTS":
             days = 40
-        elif rec in {"MTS-LITE", "MTS LITE", "MTSLITE"}:
+        elif rec.strip().upper() in {"MTS - LITE", "MTS LITE", "MTSLITE"}:
             days = 20
+
         else:
             days = 0
 
