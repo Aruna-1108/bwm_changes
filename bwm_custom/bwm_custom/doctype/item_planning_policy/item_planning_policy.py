@@ -238,16 +238,16 @@ class ItemPlanningPolicy(Document):
         Exactly aligned with SQL policy_pick:
 
         MTS:
-        abc_fine ∈ {A1, A2}
-        AND xyz_class = 'X'
-        AND fsn_class ∈ {F, S}
-        AND customers_t12 ≥ 2
+          abc_fine ∈ {A1, A2}
+          AND xyz_class = 'X'
+          AND fsn_class ∈ {F, S}
+          AND customers_t12 ≥ 2
 
         MTS-Lite:
-        abc_fine ∈ {A1, A2} AND (
-            (xyz_class ∈ {X, Y} AND fsn_class ∈ {F, S} AND customers_t12 ≥ 2)
-        OR (abc_fine='A1' AND cv_t12 ≤ 1.75 AND customers_t12 ≥ 5 AND active_months_12 ≥ 6)
-        )
+          abc_fine ∈ {A1, A2} AND (
+              (xyz_class ∈ {X, Y} AND fsn_class ∈ {F, S} AND customers_t12 ≥ 2)
+           OR (abc_fine='A1' AND cv_t12 ≤ 1.75 AND customers_t12 ≥ 5 AND active_months_12 ≥ 6)
+          )
 
         Else: MTO
         """
@@ -266,31 +266,19 @@ class ItemPlanningPolicy(Document):
         is_A12 = abc_fine in {"A1", "A2"}
         fsn_good = fsn in {"F", "S"}
 
-        # ---------------- MTS ----------------
+        # MTS gate (same as query)
         if is_A12 and xyz == "X" and fsn_good and customers >= 2:
             rec = "MTS"
-
         else:
-            # ------------- MAIN MTS-Lite condition -------------
-            cond_main = (
-                is_A12
-                and (xyz in {"X", "Y"})
-                and fsn_good
-                and customers >= 2
-            )
-
-            # ------------- OVERRIDE RULE (Corrected) -------------
+            # MTS-Lite gates (same as query)
+            cond_main = (is_A12 and (xyz in {"X", "Y"}) and fsn_good and customers >= 2)
             cond_override = (
                 abc_fine == "A1"
                 and (cv is not None and cv <= 1.75)
-                and customers >= 2
-                and 4 <= active_m <= 8          # FSN = S window
+                and customers >= 5
+                and active_m >= 6
             )
-
-            if cond_main or cond_override:
-                rec = "MTS-Lite"
-            else:
-                rec = "MTO"
+            rec = "MTS-Lite" if (cond_main or cond_override) else "MTO"
 
         if hasattr(self, "policy_recommendation"):
             self.policy_recommendation = rec
@@ -369,12 +357,13 @@ class ItemPlanningPolicy(Document):
     # ---------- 3) LEAD DAYS (legacy median PO -> PR) ----------
     def compute_lead_days(self) -> float:
         """
-        Median of (PR.posting_date - PO.transaction_date) in days.
-        (Kept for backward compatibility; main ROP math uses compute_p50_lead_days + _selected_lead_days.)
+        Median of (PR.posting_date - PO.transaction_date) in days,
+        using ONLY samples from the last 730 days (to match SQL).
+        (Kept for backward compatibility; main ROP math uses
+         compute_p50_lead_days + _selected_lead_days.)
         """
         item_code = (getattr(self, "item", None) or "").strip()
         company = (getattr(self, "company", None) or "").strip()
-        warehouse = (getattr(self, "request_for_warehouse", None) or "").strip() or None
         cost_center = (getattr(self, "cost_center", None) or "").strip() or None
 
         if not item_code or not company:
@@ -384,7 +373,6 @@ class ItemPlanningPolicy(Document):
         params = {
             "item_code": item_code,
             "company": company,
-            "warehouse": warehouse,
             "cost_center": cost_center,
         }
 
@@ -402,6 +390,7 @@ class ItemPlanningPolicy(Document):
                 JOIN `tabPurchase Receipt` pr
                      ON pr.name = pri.parent AND pr.docstatus = 1
                 WHERE pr.posting_date IS NOT NULL
+                  AND pr.posting_date >= DATE_SUB(CURDATE(), INTERVAL 730 DAY)
                 GROUP BY pri.purchase_order_item
             ) fr ON fr.purchase_order_item = poi.name
             JOIN `tabPurchase Receipt Item` pri2
@@ -411,11 +400,14 @@ class ItemPlanningPolicy(Document):
             WHERE
                 poi.item_code = %(item_code)s
                 AND pr2.company = %(company)s
-                AND (%(warehouse)s   IS NULL OR pri2.warehouse = %(warehouse)s)
-                AND (%(cost_center)s IS NULL OR COALESCE(poi.cost_center, pri2.cost_center) = %(cost_center)s)
+                AND pr2.posting_date >= DATE_SUB(CURDATE(), INTERVAL 730 DAY)
                 AND po.transaction_date IS NOT NULL
                 AND fr.first_receipt_date IS NOT NULL
                 AND DATEDIFF(fr.first_receipt_date, po.transaction_date) >= 0
+                AND (
+                    %(cost_center)s IS NULL
+                    OR COALESCE(poi.cost_center, pri2.cost_center) = %(cost_center)s
+                )
         """
         rows = frappe.db.sql(sql, params) or []
         vec = sorted(float(r[0]) for r in rows if r and r[0] is not None)
@@ -423,11 +415,10 @@ class ItemPlanningPolicy(Document):
         if not vec:
             self.lead_days = 0.0
             frappe.logger().info({
-                "msg": "Median lead days: no observations",
+                "msg": "Median lead days: no observations (730d window)",
                 "item_code": item_code,
                 "company": company,
-                "warehouse": warehouse,
-                "cost_center": cost_center
+                "cost_center": cost_center,
             })
             return 0.0
 
@@ -439,6 +430,15 @@ class ItemPlanningPolicy(Document):
 
     # ---------- 3.1 P-50, P-80, Average lead day ----------
     def compute_p50_lead_days(self) -> float:
+        """
+        Compute P50 (median), P80, and AVG lead time from PO->PR samples
+        over the LAST 730 DAYS, matching the SQL leadtime_samples logic:
+
+          - Sample: lt_days = GREATEST(0, DATEDIFF(PR.posting_date, PO.transaction_date))
+          - Window: pr.posting_date >= CURDATE() - INTERVAL 730 DAY
+          - P50: median (average of middle 1 or 2 values)
+          - P80: nearest-rank, CEIL(0.80 * n)
+        """
         def percentile_nearest_rank(sorted_vec, q: float) -> float:
             n = len(sorted_vec)
             if n == 0:
@@ -450,7 +450,6 @@ class ItemPlanningPolicy(Document):
 
         item_code = (getattr(self, "item", None) or "").strip()
         company = (getattr(self, "company", None) or "").strip()
-        warehouse = (getattr(self, "request_for_warehouse", None) or "").strip() or None
         cost_center = (getattr(self, "cost_center", None) or "").strip() or None
 
         def _reset_targets():
@@ -465,13 +464,10 @@ class ItemPlanningPolicy(Document):
         params = {
             "item_code": item_code,
             "company": company,
-            "warehouse": warehouse,
             "cost_center": cost_center,
         }
 
-        # NOTE: This uses all history for the item/company/cost_center combo.
-        # If you want to mimic the 730-day window of the big SQL exactly,
-        # you can add a pr.posting_date filter into this query.
+        # MATCHING the 730-day leadtime_samples window in SQL
         sql = """
             SELECT
                 GREATEST(0, DATEDIFF(fr.first_receipt_date, po.transaction_date)) AS lt_days
@@ -486,6 +482,7 @@ class ItemPlanningPolicy(Document):
                 JOIN `tabPurchase Receipt` pr
                      ON pr.name = pri.parent AND pr.docstatus = 1
                 WHERE pr.posting_date IS NOT NULL
+                  AND pr.posting_date >= DATE_SUB(CURDATE(), INTERVAL 730 DAY)
                 GROUP BY pri.purchase_order_item
             ) fr ON fr.purchase_order_item = poi.name
             JOIN `tabPurchase Receipt Item` pri2
@@ -495,20 +492,38 @@ class ItemPlanningPolicy(Document):
             WHERE
                 poi.item_code = %(item_code)s
                 AND pr2.company = %(company)s
-                AND (%(warehouse)s   IS NULL OR pri2.warehouse = %(warehouse)s)
-                AND (%(cost_center)s IS NULL OR COALESCE(poi.cost_center, pri2.cost_center) = %(cost_center)s)
+                AND pr2.posting_date >= DATE_SUB(CURDATE(), INTERVAL 730 DAY)
                 AND po.transaction_date IS NOT NULL
                 AND fr.first_receipt_date IS NOT NULL
                 AND DATEDIFF(fr.first_receipt_date, po.transaction_date) >= 0
+                AND (
+                    %(cost_center)s IS NULL
+                    OR COALESCE(poi.cost_center, pri2.cost_center) = %(cost_center)s
+                )
         """
         rows = frappe.db.sql(sql, params) or []
         vec = sorted(float(r[0]) for r in rows if r and r[0] is not None)
 
         if not vec:
             _reset_targets()
+            frappe.logger().info({
+                "msg": "P50/P80 lead days: no observations (730d window)",
+                "item_code": item_code,
+                "company": company,
+                "cost_center": cost_center,
+            })
             return 0.0
 
-        p50 = round(percentile_nearest_rank(vec, 50.0), 2)
+        n = len(vec)
+        mid = n // 2
+
+        # median = average of middle two (for even n) → matches SQL lt_p50
+        if n % 2:
+            median_val = vec[mid]
+        else:
+            median_val = (vec[mid - 1] + vec[mid]) / 2.0
+
+        p50 = round(median_val, 2)
         p80 = round(percentile_nearest_rank(vec, 80.0), 2)
         avg = round(sum(vec) / len(vec), 2)
 
@@ -522,8 +537,8 @@ class ItemPlanningPolicy(Document):
         if hasattr(self, "lead_time_average"):
             self.lead_time_average = avg
 
-        # don't decide selected L here; that's done in _selected_lead_days
-        self.lead_days = p50  # keep for backward display
+        # keep p50 as default display lead_days
+        self.lead_days = p50
         return p50
 
     def _selected_lead_days(self) -> float:
@@ -579,7 +594,7 @@ class ItemPlanningPolicy(Document):
             (no warehouse filter).
 
           L   = selected lead days:
-                  A1/A2 → P80; others → P50; if 0 then fallback lead_time_average; else 45
+                  A1/A2 → P80; others → P50; fallback AVG → 45
           Z   = service factor by classification (_tier/_class)
 
         Also stores:
