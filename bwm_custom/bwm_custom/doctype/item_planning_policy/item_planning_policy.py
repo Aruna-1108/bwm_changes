@@ -3,6 +3,7 @@
 
 from typing import Optional, Tuple
 import math
+import statistics
 import frappe
 from frappe.model.document import Document
 from frappe.utils import today, add_months, getdate
@@ -21,18 +22,278 @@ class ItemPlanningPolicy(Document):
           5) Minimum Inventory Qty
           6) ROL (uses selected lead_days + safety_days)
           7) ROQ
+          8) XYZ Classification (T12 variability)
+          9) FSN logic (F/S/N from active months in T12)
+         10) Policy recommendation (MTS / MTS-Lite / MTO) → Coverage Days
         """
+        # Demand base
         last3 = self.compute_last3_sales_qty()
-        daily = self.compute_requirements(last3)          # returns daily
+        daily = self.compute_requirements(last3)  # returns daily
 
-        # Compute percentiles & avg, then choose lead_days by item_classification
-        self.compute_p50_lead_days()                      # fills p50, p80, lead_time_average; sets lead_days=P-50
-        self.select_lead_days()                           # overwrite lead_days per A1/A2 rule
+        # Lead-time stats & item class cache
+        self.compute_p50_lead_days()
+        self._fetch_and_assign_item_classification()
 
-        self.compute_safety_days()                        # sets self.safety_days
+        # XYZ & FSN metrics
+        self.compute_xyz_classification()
+        self._t12_customer_invoice_fsn()
+
+        # Downstream calcs using lead-days + demand stats
+        self.select_lead_days()
+        self.compute_safety_days()
         self.compute_minimum_inventory_qty(daily)
-        self.compute_rol(daily)                           # always re-selects lead_days internally (robust)
+        self.compute_rol(daily)
+
+        # Policy → Coverage → ROQ
+        self.compute_policy_recommendation()
+        self.apply_coverage_from_policy()
         self.compute_roq(daily)
+
+    # -------------------- Helpers to fetch classification from Bucket Branch Detail --------------------
+    def _fetch_item_classification_row(self, item_code: str, cost_center: str):
+        if not item_code or not cost_center:
+            return None
+        sql = """
+            SELECT
+              COALESCE(bbd._class, '') AS _class,
+              COALESCE(bbd._tier, '')  AS _tier
+            FROM `tabItem Classification` ic
+            JOIN `tabBucket Branch Detail` bbd ON bbd.parent = ic.name
+            WHERE ic.item = %s
+              AND bbd.cost_center_name = %s
+            LIMIT 1
+        """
+        val = frappe.db.sql(sql, (item_code, cost_center), as_dict=True)
+        if not val:
+            return None
+        return val[0]
+
+    def _fetch_and_assign_item_classification(self):
+        item_code = (getattr(self, "item", None) or "").strip()
+        cost_center = (getattr(self, "cost_center", None) or "").strip()
+        if not item_code or not cost_center:
+            return ""
+        row = self._fetch_item_classification_row(item_code, cost_center)
+        if not row:
+            self._tier_value = ""
+            self._class_value = ""
+            return ""
+        cls = (row.get("_class") or "").strip()
+        tier = (row.get("_tier") or "").strip()
+        if hasattr(self, "item_classification") and cls:
+            self.item_classification = cls
+        self._tier_value = tier.upper() if tier else ""
+        self._class_value = cls.upper() if cls else ""
+        return cls
+
+    # -------------------- XYZ Classification --------------------
+    def compute_xyz_classification(self) -> Tuple[str, Optional[float]]:
+        item_code = (getattr(self, "item", "") or "").strip()
+        cost_center = (getattr(self, "cost_center", "") or "").strip()
+        if not item_code or not cost_center:
+            if hasattr(self, "xyz_classifications"):
+                self.xyz_classifications = ""
+            if hasattr(self, "cv_t12"):
+                self.cv_t12 = None
+            if hasattr(self, "avg_m_qty"):
+                self.avg_m_qty = 0.0
+            if hasattr(self, "sd_m_qty"):
+                self.sd_m_qty = 0.0
+            if hasattr(self, "units_365d"):
+                self.units_365d = 0.0
+            return ("", None)
+
+        from_date = add_months(getdate(today()), -12)
+        to_date = getdate(today())
+
+        sql = """
+            SELECT DATE_FORMAT(si.posting_date, '%%Y-%%m') AS ym,
+                   COALESCE(SUM(sii.qty), 0) AS m_qty
+            FROM `tabSales Invoice Item` sii
+            JOIN `tabSales Invoice` si ON si.name = sii.parent
+            WHERE si.docstatus = 1
+              AND sii.item_code = %s
+              AND COALESCE(si.cost_center, sii.cost_center) = %s
+              AND si.posting_date BETWEEN %s AND %s
+            GROUP BY ym
+            ORDER BY ym
+        """
+        rows = frappe.db.sql(sql, (item_code, cost_center, from_date, to_date))
+        monthly_vals = [float(r[1] or 0.0) for r in rows] if rows else []
+
+        if not monthly_vals or sum(monthly_vals) == 0:
+            xyz, avg_m, sd_m, cv, units_365d = "Z", 0.0, 0.0, None, 0.0
+        else:
+            n = len(monthly_vals)
+            avg_m = sum(monthly_vals) / n
+            sd_m = float(statistics.stdev(monthly_vals)) if n >= 2 else 0.0
+            units_365d = sum(monthly_vals)
+            cv = (sd_m / avg_m) if avg_m > 0 else None
+
+            if avg_m == 0 or cv is None:
+                xyz = "Z"
+            elif cv <= 0.75:
+                xyz = "X"
+            elif cv <= 1.25:
+                xyz = "Y"
+            else:
+                xyz = "Z"
+
+        if hasattr(self, "avg_m_qty"):
+            self.avg_m_qty = round(avg_m, ROUND_PLACES)
+        if hasattr(self, "sd_m_qty"):
+            self.sd_m_qty = round(sd_m, ROUND_PLACES)
+        if hasattr(self, "cv_t12"):
+            self.cv_t12 = round(cv, 3) if cv is not None else None
+        if hasattr(self, "xyz_classifications"):
+            self.xyz_classifications = xyz
+        if hasattr(self, "units_365d"):
+            self.units_365d = round(units_365d, ROUND_PLACES)
+
+        return (xyz, cv)
+
+    # --------------------- FSN Logic (F / S / N) ----------------------
+    def _t12_customer_invoice_fsn(self) -> Tuple[int, int, int, str]:
+        """
+        Last 12 months KPIs:
+          - customers_t12
+          - invoices_t12
+          - active_months_12
+          - fsn_logic  → F (>=9) , S (4–8) , N (<=3)
+        """
+        item_code = (getattr(self, "item", "") or "").strip()
+        cost_center = (getattr(self, "cost_center", "") or "").strip()
+        if not item_code or not cost_center:
+            if hasattr(self, "fsn_logic"):
+                self.fsn_logic = "N"
+            return (0, 0, 0, "N")
+
+        from_date = add_months(getdate(today()), -12)
+        to_date = getdate(today())
+
+        # Distinct customers
+        sql_cust = """
+            SELECT COUNT(DISTINCT si.customer)
+            FROM `tabSales Invoice Item` sii
+            JOIN `tabSales Invoice` si ON si.name = sii.parent
+            WHERE si.docstatus = 1
+              AND sii.item_code = %s
+              AND COALESCE(si.cost_center, sii.cost_center) = %s
+              AND si.posting_date BETWEEN %s AND %s
+              AND si.customer IS NOT NULL AND si.customer <> ''
+        """
+        customers_t12 = int(frappe.db.sql(sql_cust, (item_code, cost_center, from_date, to_date))[0][0] or 0)
+
+        # Distinct invoices
+        sql_inv = """
+            SELECT COUNT(DISTINCT si.name)
+            FROM `tabSales Invoice Item` sii
+            JOIN `tabSales Invoice` si ON si.name = sii.parent
+            WHERE si.docstatus = 1
+              AND sii.item_code = %s
+              AND COALESCE(si.cost_center, sii.cost_center) = %s
+              AND si.posting_date BETWEEN %s AND %s
+        """
+        invoices_t12 = int(frappe.db.sql(sql_inv, (item_code, cost_center, from_date, to_date))[0][0] or 0)
+
+        # Active months
+        sql_months = """
+            SELECT COUNT(*) FROM (
+              SELECT DATE_FORMAT(si.posting_date, '%%Y-%%m') AS ym, SUM(sii.qty) AS m_qty
+              FROM `tabSales Invoice Item` sii
+              JOIN `tabSales Invoice` si ON si.name = sii.parent
+              WHERE si.docstatus = 1
+                AND sii.item_code = %s
+                AND COALESCE(si.cost_center, sii.cost_center) = %s
+                AND si.posting_date BETWEEN %s AND %s
+              GROUP BY ym
+              HAVING SUM(sii.qty) >= 1
+            ) t
+        """
+        res = frappe.db.sql(sql_months, (item_code, cost_center, from_date, to_date))
+        active_months_12 = int((res[0][0] if res else 0) or 0)
+
+        # FSN class
+        if active_months_12 >= 9:
+            fsn_logic = "F"
+        elif 4 <= active_months_12 <= 8:
+            fsn_logic = "S"
+        else:
+            fsn_logic = "N"
+
+        if hasattr(self, "customers_t12"):
+            self.customers_t12 = customers_t12
+        if hasattr(self, "invoices_t12"):
+            self.invoices_t12 = invoices_t12
+        if hasattr(self, "active_months_12"):
+            self.active_months_12 = active_months_12
+        if hasattr(self, "fsn_logic"):
+            self.fsn_logic = fsn_logic
+
+        return (customers_t12, invoices_t12, active_months_12, fsn_logic)
+
+    # -------------------- Policy Recommendation (MTS / MTS-Lite / MTO) --------------------
+    def compute_policy_recommendation(self) -> str:
+        """
+        MTS:
+          abc_fine ∈ {A1, A2} AND xyz_class = 'X' AND fsn_class ∈ {F, S} AND customers_t12 ≥ 2
+
+        MTS-Lite:
+          abc_fine ∈ {A1, A2} AND (
+              (xyz_class ∈ {X, Y} AND fsn_class ∈ {F, S} AND customers_t12 ≥ 2)
+           OR (abc_fine='A1' AND cv_t12 ≤ 1.75 AND customers_t12 ≥ 5 AND active_months_12 ≥ 6)
+          )
+
+        Else: MTO
+        """
+        # abc_fine: try dedicated field; fallback to item_classification
+        abc_fine = (getattr(self, "abc_fine", None) or getattr(self, "item_classification", "") or "").strip().upper()
+        xyz = (getattr(self, "xyz_classifications", "") or "").strip().upper()
+        fsn = (getattr(self, "fsn_logic", "") or "").strip().upper()
+        customers = int(getattr(self, "customers_t12", 0) or 0)
+        active_m = int(getattr(self, "active_months_12", 0) or 0)
+        cv = getattr(self, "cv_t12", None)
+        try:
+            cv = float(cv) if cv is not None else None
+        except Exception:
+            cv = None
+
+        is_A12 = abc_fine in {"A1", "A2"}
+        fsn_good = fsn in {"F", "S"}
+
+        # MTS gate
+        if is_A12 and xyz == "X" and fsn_good and customers >= 2:
+            rec = "MTS"
+        else:
+            # MTS-Lite gates
+            cond_main = (is_A12 and (xyz in {"X", "Y"}) and fsn_good and customers >= 2)
+            cond_override = (abc_fine == "A1" and (cv is not None and cv <= 1.75) and customers >= 5 and active_m >= 6)
+            rec = "MTS-Lite" if (cond_main or cond_override) else "MTO"
+
+        if hasattr(self, "policy_recommendation"):
+            self.policy_recommendation = rec
+        return rec
+
+    # ---------------- Coverage Days from Policy ----------------
+    def apply_coverage_from_policy(self) -> int:
+        """
+        Map policy_recommendation → coverage_days.
+          - MTS       : 40
+          - MTS-Lite  : 20
+          - else (MTO): 0
+        Writes self.coverage_days if field exists. Returns the int days used.
+        """
+        rec = (getattr(self, "policy_recommendation", "") or "").strip().upper()
+        if rec == "MTS":
+            days = 40
+        elif rec in {"MTS-LITE", "MTS LITE", "MTSLITE"}:
+            days = 20
+        else:
+            days = 0
+
+        if hasattr(self, "coverage_days"):
+            self.coverage_days = days
+        return days
 
     # ---------- 1) SALES (last 3 months) ----------
     def compute_last3_sales_qty(self) -> float:
@@ -44,7 +305,6 @@ class ItemPlanningPolicy(Document):
 
         company: Optional[str] = getattr(self, "company", None)
         cost_center: Optional[str] = getattr(self, "cost_center", None)
-        # warehouse = getattr(self, "request_for_warehouse", None)  # not used
 
         from_date = add_months(getdate(today()), -3)
         to_date = getdate(today())
@@ -82,15 +342,9 @@ class ItemPlanningPolicy(Document):
         return daily
 
     # ---------- 3) LEAD DAYS (legacy median PO -> PR) ----------
-    # (Kept for completeness; validate() uses the percentile path instead.)
     def compute_lead_days(self) -> float:
         """
-        Lead Days = MEDIAN of (PR.posting_date - PO.transaction_date) in days.
-        Filters:
-          - company (PR header)
-          - optional warehouse (PR Item)
-          - optional cost_center (prefer PO Item row, else PR Item row)
-        Writes to self.lead_days (2 decimals).
+        Median of (PR.posting_date - PO.transaction_date) in days.
         """
         item_code = (getattr(self, "item", None) or "").strip()
         company = (getattr(self, "company", None) or "").strip()
@@ -157,17 +411,8 @@ class ItemPlanningPolicy(Document):
         self.lead_days = round(median_val, 2)
         return self.lead_days
 
-    # -------------------- 3.1 P-50, P-80, Average lead day ------------------------
+    # ---------- 3.1 P-50, P-80, Average lead day ----------
     def compute_p50_lead_days(self) -> float:
-        """
-        Computes percentile stats for lead time (PO -> first PR) and writes:
-          - self.lead_days         = P-50 (median)  [temporary; selector may overwrite]
-          - self.p50_lead_days     = P-50           (if field exists)
-          - self.p50               = P-50           (if field exists)
-          - self.p80               = P-80           (if field exists)
-          - self.lead_time_average = average days   (if field exists)
-        Returns P-50 for backward compatibility.
-        """
         def percentile_nearest_rank(sorted_vec, q: float) -> float:
             n = len(sorted_vec)
             if n == 0:
@@ -234,15 +479,11 @@ class ItemPlanningPolicy(Document):
             _reset_targets()
             return 0.0
 
-        # Percentiles + average
         p50 = round(percentile_nearest_rank(vec, 50.0), 2)
         p80 = round(percentile_nearest_rank(vec, 80.0), 2)
         avg = round(sum(vec) / len(vec), 2)
 
-        # Default to P-50 for now (selector may overwrite this)
         self.lead_days = p50
-
-        # Write fields if present
         if hasattr(self, "p50_lead_days"):
             self.p50_lead_days = p50
         if hasattr(self, "p50"):
@@ -256,16 +497,14 @@ class ItemPlanningPolicy(Document):
 
     def _selected_lead_days(self) -> float:
         """
-        Returns the lead-days to use based on item_classification:
-          - A1/A2  -> P-80 (if available), else P-50, else current lead_days, else 0
-          - Others -> P-50 (if available), else current lead_days, else 0
+        - A1/A2  -> P-80 (if available), else P-50, else current lead_days, else 0
+        - Others -> P-50 (if available), else current lead_days, else 0
         """
-        ic  = (getattr(self, "item_classification", "") or "").strip().upper()
+        ic = (getattr(self, "item_classification", "") or "").strip().upper()
         p50 = float(getattr(self, "p50", getattr(self, "p50_lead_days", 0)) or 0)
         p80 = float(getattr(self, "p80", 0) or 0)
         current = float(getattr(self, "lead_days", 0) or 0)
-
-        if ic in ("A1", "A2"):
+        if ic in {"A1", "A2"}:
             return p80 if p80 > 0 else (p50 if p50 > 0 else current)
         else:
             return p50 if p50 > 0 else (current if current > 0 else 0.0)
@@ -274,16 +513,18 @@ class ItemPlanningPolicy(Document):
         """Write the chosen lead_days to the doc (A1/A2 -> P-80, else P-50)."""
         self.lead_days = self._selected_lead_days()
 
-    # ---------- 4) SAFETY DAYS (statistical) ----------
+    # ---------- Safety Days (UPDATED: B2 rule, ignore σL) ----------
     def compute_safety_days(self) -> float:
         """
-        Safety Days = ( Z × sqrt( E[L]*σD^2 + E[D]^2*σL^2 ) ) / E[D]
+        B2 rule (ignore lead-time variability):
+          SafetyDays = ( Z * sigma_daily * sqrt(L) ) / ADD
+
         Where:
-          - E[D], σD from weekly issues (SI/DN Items) over `weeks_back` weeks (default 26)
-          - E[L], σL from PO -> PR samples over `lt_window_days` (default 365 days)
-          - Z from Item Classification × Bucket Branch Detail; fallback 1.95996
-        Uses: self.company, self.cost_center, self.request_for_warehouse, self.item
-        Writes: self.safety_days (2 decimals)
+          ADD = average daily demand from weekly issues (Sales Invoice + Delivery Note)
+          sigma_daily = stdev of weekly issues / sqrt(7)
+          L = selected lead days:
+                A1/A2 → P80; others → P50; if 0 then fallback lead_time_average; else 45
+          Z = service factor by classification (_tier/_class)
         """
         item_code = (getattr(self, "item", None) or "").strip()
         company = (getattr(self, "company", None) or "").strip()
@@ -293,45 +534,29 @@ class ItemPlanningPolicy(Document):
         if not item_code or not company or not cost_center:
             return float(getattr(self, "safety_days", 0) or 0)
 
+        # Demand stats from weekly issues
         weeks_back = int(getattr(self, "weeks_back", 26) or 26)
-        lt_window_days = int(getattr(self, "lt_window_days", 365) or 365)
-
-        # Demand stats (E[D], σD)
         add_per_day, sigma_daily = self._get_demand_stats(
             item_code=item_code,
             cost_center=cost_center,
             weeks_back=weeks_back,
-            warehouse=warehouse
+            warehouse=warehouse,
         )
 
-        # Lead time stats (E[L], σL)
-        lt_avg_days, lt_sd_days = self._get_leadtime_stats(
-            item_code=item_code,
-            company=company,
-            cost_center=cost_center,
-            lt_window_days=lt_window_days,
-            warehouse=warehouse
-        )
+        # Lead days: classification-based percentile with fallbacks
+        L = float(self._selected_lead_days() or 0.0)
+        if L <= 0:
+            # use average lead time computed in compute_p50_lead_days(), then hard fallback 45
+            L = float(getattr(self, "lead_time_average", 0) or 45.0)
 
-        # Z
-        z_value = self._get_z_value(item_code, cost_center)
+        Z = self._get_z_value(item_code, cost_center)
 
-        if add_per_day <= 0:
+        if add_per_day <= 0 or L <= 0 or sigma_daily <= 0:
             self.safety_days = 0.0
             return self.safety_days
 
-        # σDLT  = sqrt( E[L]*σD^2 + E[D]^2*σL^2 )
-        sigma_dlt_units = math.sqrt(
-            max(0.0, (lt_avg_days * (sigma_daily ** 2)) + ((add_per_day ** 2) * (lt_sd_days ** 2)))
-        )
-
-        # Safety Stock (units) = Z * σDLT
-        safety_stock_units = z_value * sigma_dlt_units
-
-        # Safety Days = SS / E[D]
-        safety_days = safety_stock_units / add_per_day if add_per_day > 0 else 0.0
-        self.safety_days = round(safety_days, 2)
-
+        safety_days = (Z * sigma_daily * math.sqrt(L)) / add_per_day
+        self.safety_days = round(max(0.0, safety_days), 2)
         return self.safety_days
 
     def _get_demand_stats(
@@ -342,18 +567,11 @@ class ItemPlanningPolicy(Document):
         warehouse: Optional[str] = None
     ) -> Tuple[float, float]:
         """
-        Returns (E[D] add_per_day, σD sigma_daily) from weekly customer issues.
-        Aggregates Sales Invoice Item and Delivery Note Item (submitted),
-        filtering by cost_center via (header/item) and optional warehouse.
+        Returns (E[D] add_per_day, σD sigma_daily) from weekly issues
+        (Sales Invoice Items + Delivery Note Items).
         """
-        params = {
-            "item_code": item_code,
-            "cc": cost_center,
-            "weeks": weeks_back,
-            "warehouse": warehouse,
-        }
+        params = {"item_code": item_code, "cc": cost_center, "weeks": weeks_back, "warehouse": warehouse}
 
-        # Weekly issues from Sales Invoice Items
         si_sql = """
             SELECT
               DATE_SUB(DATE(si.posting_date), INTERVAL WEEKDAY(si.posting_date) DAY) AS week_start,
@@ -366,10 +584,8 @@ class ItemPlanningPolicy(Document):
               AND si.posting_date <  DATE_ADD(CURDATE(), INTERVAL 1 DAY)
               AND (COALESCE(si.cost_center, sii.cost_center) = %(cc)s)
               AND (%(warehouse)s IS NULL OR sii.warehouse = %(warehouse)s)
-            GROUP BY week_start
         """
 
-        # Weekly issues from Delivery Note Items (for non-invoiced or direct DN flows)
         dn_sql = """
             SELECT
               DATE_SUB(DATE(dn.posting_date), INTERVAL WEEKDAY(dn.posting_date) DAY) AS week_start,
@@ -382,10 +598,9 @@ class ItemPlanningPolicy(Document):
               AND dn.posting_date <  DATE_ADD(CURDATE(), INTERVAL 1 DAY)
               AND (COALESCE(dn.cost_center, dni.cost_center) = %(cc)s)
               AND (%(warehouse)s IS NULL OR dni.warehouse = %(warehouse)s)
-            GROUP BY week_start
         """
 
-        # Union the weekly buckets and compute ADD & sigma
+        # Average & stdev across weekly buckets
         wrapper = f"""
             SELECT
               AVG(week_qty)/7.0          AS add_per_day,
@@ -395,7 +610,6 @@ class ItemPlanningPolicy(Document):
                 UNION ALL
                 {dn_sql}
             ) q
-            GROUP BY 1=1
         """
         val = frappe.db.sql(wrapper, params)
         if not val:
@@ -412,20 +626,8 @@ class ItemPlanningPolicy(Document):
         lt_window_days: int,
         warehouse: Optional[str] = None
     ) -> Tuple[float, float]:
-        """
-        Returns (E[L], σL) from PO -> PR samples.
-        Filters:
-          - pr.company
-          - cost_center via COALESCE(poi.cost_center, pri.cost_center)
-          - optional exact warehouse via pri.warehouse
-        """
-        params = {
-            "item_code": item_code,
-            "company": company,
-            "cc": cost_center,
-            "days": lt_window_days,
-            "warehouse": warehouse,
-        }
+        """Returns (E[L], σL) from PO -> PR samples."""
+        params = {"item_code": item_code, "company": company, "cc": cost_center, "days": lt_window_days, "warehouse": warehouse}
         sql = """
             SELECT
               AVG(lt_days)    AS avg_lt_days,
@@ -456,10 +658,18 @@ class ItemPlanningPolicy(Document):
         return (avg_lt, sd_lt)
 
     def _get_z_value(self, item_code: str, cost_center: str) -> float:
-        """
-        Maps Z via Item Classification × Bucket Branch Detail for the cost center.
-        Fallback: 1.95996398454005 (~97.5% service level)
-        """
+        """Map Z from cached _tier/_class; fallback to SQL CASE; default 1.95996."""
+        tier = getattr(self, "_tier_value", None)
+        cls = getattr(self, "_class_value", None)
+        if tier:
+            tier = tier.strip().upper()
+        if cls:
+            cls = cls.strip().upper()
+        if tier in {"A1", "A+", "A-PRIME"}:
+            return 2.32634787404084
+        if cls == "A" or (tier and tier.startswith("A")):
+            return 2.05374891063182
+
         params = {"item_code": item_code, "cc": cost_center}
         sql = """
             SELECT
@@ -481,7 +691,7 @@ class ItemPlanningPolicy(Document):
 
     # ---------- 5) MINIMUM INVENTORY QTY ----------
     def compute_minimum_inventory_qty(self, daily: float):
-        """Minimum Inventory Qty = Safety Days × Daily Requirement"""
+        """Minimum Inventory Qty = Safety Days × Daily Requirement."""
         safety_days = getattr(self, "safety_days", 0) or 0
         daily = daily or 0
         minimum_qty = safety_days * daily
@@ -490,21 +700,18 @@ class ItemPlanningPolicy(Document):
     # ---------- 6) ROL ----------
     def compute_rol(self, daily: float):
         """
-        ROL = (Safety Days + Lead Days) × Daily Requirement
+        ROL = (Safety Days + Lead Days) × Daily Requirement.
         Lead Days chosen dynamically by item_classification (A1/A2 -> P-80; else -> P-50).
         """
         safety_days = float(getattr(self, "safety_days", 0) or 0)
-        lead_days   = self._selected_lead_days()     # robust even if called directly
-        daily       = float(daily or 0)
-
+        lead_days = self._selected_lead_days()
+        daily = float(daily or 0)
         rol_qty = (safety_days + lead_days) * daily
         self.rol = round(rol_qty, ROUND_PLACES)
 
     # ---------- 7) ROQ ----------
     def compute_roq(self, daily: float):
-        """
-        ROQ = Coverage Days × Daily Requirement
-        """
+        """ROQ = Coverage Days × Daily Requirement."""
         coverage_days = getattr(self, "coverage_days", 0) or 0
         daily = daily or 0
         roq = coverage_days * daily
@@ -512,28 +719,18 @@ class ItemPlanningPolicy(Document):
 
 
 # --------------- Update or Add New Row to Item Re-order ---------------
-
 @frappe.whitelist()
 def apply_item_reorder_from_policy(policy_name: str):
     """
     Upsert Item → Auto-reorder row using ONLY policy.final_rol and policy.final_roq.
-
     Uniqueness rule (ERPNext core): ONE row per (warehouse, material_request_type)
-
-    Behavior:
-      - Match EXISTING row by (warehouse, MR type)  ← ignore group for matching
-      - If none, but there is EXACTLY ONE row for the same warehouse (legacy blank/diff MR),
-        treat that as the target row
-      - Update warehouse_reorder_level = final_rol, warehouse_reorder_qty = final_roq
-      - Also update material_request_type and warehouse_group (if field exists)
-      - If multiple duplicates exist for same (WH, MR), keep first, delete extras
     """
     if not policy_name:
         frappe.throw("Policy name is required")
 
     policy = frappe.get_doc("Item Planning Policy", policy_name)
 
-    # --- validations (STRICT: require final_* fields) ---
+    # validations (STRICT: require final_* fields)
     missing = []
     if not (policy.item or "").strip():
         missing.append("Item")
@@ -548,13 +745,13 @@ def apply_item_reorder_from_policy(policy_name: str):
     if missing:
         frappe.throw("Please enter: <b>{}</b>".format(", ".join(missing)))
 
-    # --- map core fields ---
+    # map core fields
     item_code = (policy.item or "").strip()
-    wh        = (policy.request_for_warehouse or "").strip()
-    wh_group  = (getattr(policy, "check_in_groups", None) or "").strip() or None  # optional/custom
-    mr_type   = (policy.material_request_type or "Purchase").strip()
+    wh = (policy.request_for_warehouse or "").strip()
+    wh_group = (getattr(policy, "check_in_groups", None) or "").strip() or None  # optional/custom
+    mr_type = (policy.material_request_type or "Purchase").strip()
 
-    # --- numeric from final_* (strict) ---
+    # numeric from final_* (strict)
     try:
         rol = float(policy.final_rol)
     except Exception:
@@ -564,7 +761,7 @@ def apply_item_reorder_from_policy(policy_name: str):
     except Exception:
         frappe.throw("final_roq must be a number")
 
-    # --- load item & permission ---
+    # load item & permission
     item = frappe.get_doc("Item", item_code)
     if not frappe.has_permission("Item", ptype="write", doc=item):
         frappe.throw(f"You do not have permission to update Item {item_code}")
@@ -590,6 +787,7 @@ def apply_item_reorder_from_policy(policy_name: str):
             matches = by_wh
 
     EPS = 1e-9
+
     def changed(a, b) -> bool:
         return abs(float(a or 0) - float(b or 0)) > EPS
 
@@ -601,13 +799,13 @@ def apply_item_reorder_from_policy(policy_name: str):
 
         rol_changed = changed(getattr(keep, "warehouse_reorder_level", 0), rol)
         roq_changed = changed(getattr(keep, "warehouse_reorder_qty", 0), roq)
-        mr_changed  = (norm(getattr(keep, "material_request_type", "")) != mr_n)
+        mr_changed = (norm(getattr(keep, "material_request_type", "")) != mr_n)
         grp_changed = (norm(getattr(keep, "warehouse_group", None)) != norm(wh_group))
 
         if rol_changed or roq_changed or mr_changed or grp_changed:
             keep.warehouse_reorder_level = rol
-            keep.warehouse_reorder_qty   = roq
-            keep.material_request_type   = mr_type
+            keep.warehouse_reorder_qty = roq
+            keep.material_request_type = mr_type
             if hasattr(keep, "warehouse_group"):
                 keep.warehouse_group = wh_group
             op = "updated"
@@ -622,12 +820,12 @@ def apply_item_reorder_from_policy(policy_name: str):
     else:
         # no match → insert new row
         new_row = item.append("reorder_levels", {})
-        new_row.warehouse               = wh
+        new_row.warehouse = wh
         if hasattr(new_row, "warehouse_group"):
-            new_row.warehouse_group     = wh_group or None
+            new_row.warehouse_group = wh_group or None
         new_row.warehouse_reorder_level = rol
-        new_row.warehouse_reorder_qty   = roq
-        new_row.material_request_type   = mr_type
+        new_row.warehouse_reorder_qty = roq
+        new_row.material_request_type = mr_type
         op = "inserted"
 
     item.save(ignore_permissions=False)
