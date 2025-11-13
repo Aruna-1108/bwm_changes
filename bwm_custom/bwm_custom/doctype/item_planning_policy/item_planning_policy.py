@@ -16,20 +16,19 @@ class ItemPlanningPolicy(Document):
         """
         Auto-calc on Save (no blocking validation here):
           1) Last-3-Months Sales Qty
-          2) Monthly & Daily Requirements
+          2) Monthly & Daily Requirements  (INFORMATION ONLY; NOT used for ROL/ROQ)
           3) Lead Days selection (A1/A2 -> P-80, else P-50)
           4) Safety Days (statistical; B2 rule, ignore σL)
-          5) Minimum Inventory Qty
-          6) ROL (uses selected lead_days + safety_days)
-          7) ROQ
+          5) Minimum Inventory Qty  (= SafetyDays × ADD from T12 logic)
+          6) ROL (uses selected lead_days + safety_stock_units from T12 logic)
+          7) ROQ (= coverage_days × ADD from T12 logic)
           8) XYZ Classification (T12 variability)
           9) FSN logic (F/S/N from active months in T12)
-         10) Policy recommendation (MTS / MTS-Lite / MTO)
-         11) Coverage Days (Excel-style: lead_time_average + selected lead_days)
+         10) Policy recommendation (MTS / MTS-Lite / MTO) → Coverage Days
         """
-        # Demand base
+        # Demand base (last-3-months, purely informational)
         last3 = self.compute_last3_sales_qty()
-        daily = self.compute_requirements(last3)  # returns daily
+        daily_last3 = self.compute_requirements(last3)  # returns daily for display
 
         # Lead-time stats & item class cache
         self.compute_p50_lead_days()
@@ -39,18 +38,16 @@ class ItemPlanningPolicy(Document):
         self.compute_xyz_classification()
         self._t12_customer_invoice_fsn()
 
-        # Downstream calcs using lead-days + demand stats
+        # Downstream calcs using lead-days + demand stats (T12 / weekly)
         self.select_lead_days()
-        self.compute_safety_days()
-        self.compute_minimum_inventory_qty(daily)
-        self.compute_rol(daily)
+        self.compute_safety_days()  # sets safety_days AND _effective_add_per_day
+        self.compute_minimum_inventory_qty(daily_last3)  # will internally use effective ADD if available
+        self.compute_rol(daily_last3)                    # will internally use effective ADD if available
 
-        # Policy (for reporting/classification only)
+        # Policy → Coverage → ROQ
         self.compute_policy_recommendation()
-
-        # Coverage (Excel-style) → ROQ
-        self.compute_coverage_days_from_lead()
-        self.compute_roq(daily)
+        self.apply_coverage_from_policy()
+        self.compute_roq(daily_last3)                    # will internally use effective ADD if available
 
     # -------------------- Helpers to fetch classification from Bucket Branch Detail --------------------
     def _fetch_item_classification_row(self, item_code: str, cost_center: str):
@@ -287,15 +284,13 @@ class ItemPlanningPolicy(Document):
             self.policy_recommendation = rec
         return rec
 
-    # ---------------- Coverage Days from Policy (NOT USED IN VALIDATE NOW) ----------------
+    # ---------------- Coverage Days from Policy ----------------
     def apply_coverage_from_policy(self) -> int:
         """
         Map policy_recommendation → coverage_days.
           - MTS       : 40
           - MTS-Lite  : 20
           - else (MTO): 0
-
-        NOTE: This is kept for reference but not called from validate().
         """
         rec = (getattr(self, "policy_recommendation", "") or "").strip().upper()
         if rec == "MTS":
@@ -348,7 +343,11 @@ class ItemPlanningPolicy(Document):
 
     # ---------- 2) REQUIREMENTS (monthly / daily) ----------
     def compute_requirements(self, last3: float) -> float:
-        """Monthly = last3 / 3 ; Daily = monthly / 30. Returns daily."""
+        """
+        Monthly = last3 / 3 ; Daily = monthly / 30.
+        NOTE: This is informational. ROL/ROQ use the T12-based ADD from
+              compute_safety_days(), stored in _effective_add_per_day.
+        """
         monthly = (last3 or 0.0) / 3.0
         daily = monthly / 30.0
         self.monthly_requirement = round(monthly, ROUND_PLACES)
@@ -531,33 +530,72 @@ class ItemPlanningPolicy(Document):
     def compute_safety_days(self) -> float:
         """
         B2 rule (ignore lead-time variability):
-          SafetyDays = ( Z * sigma_daily * sqrt(L) ) / ADD
 
-        Where:
-          ADD         = average daily demand from weekly issues (Sales Invoice + Delivery Note)
-          sigma_daily = stdev of weekly issues / sqrt(7)
-          L           = selected lead days:
-                          A1/A2 → P80; others → P50; if 0 then fallback lead_time_average; else 45
-          Z           = service factor by classification (_tier/_class)
+          SafetyDays = ( Z * sigma_daily_eff * sqrt(L) ) / ADD_eff
+
+        Where (aligned with SQL):
+
+          If XYZ = 'X':
+            ADD_eff    = units_365d / 365
+            sigma_daily_eff = sd_m_qty / sqrt(365 / 12)
+          Else (Y/Z):
+            ADD_eff, sigma_daily_eff from weekly issues (Sales Invoice + Delivery Note)
+              over ~52 weeks (≈ 365 days).
+
+          L   = selected lead days:
+                  A1/A2 → P80; others → P50; if 0 then fallback lead_time_average; else 45
+          Z   = service factor by classification (_tier/_class)
+
+        Also stores:
+          - self._effective_add_per_day
+          - self._effective_sigma_daily
+          - self._demand_source = 'MONTHLY' or 'WEEKLY'
         """
         item_code = (getattr(self, "item", None) or "").strip()
         company = (getattr(self, "company", None) or "").strip()
         cost_center = (getattr(self, "cost_center", None) or "").strip()
         warehouse = (getattr(self, "request_for_warehouse", None) or "").strip() or None
 
+        # reset effective stats
+        self._effective_add_per_day = 0.0
+        self._effective_sigma_daily = 0.0
+        self._demand_source = None
+
         if not item_code or not company or not cost_center:
-            return float(getattr(self, "safety_days", 0) or 0)
+            self.safety_days = 0.0
+            return 0.0
 
-        # Demand stats from weekly issues
-        weeks_back = int(getattr(self, "weeks_back", 26) or 26)
-        add_per_day, sigma_daily = self._get_demand_stats(
-            item_code=item_code,
-            cost_center=cost_center,
-            weeks_back=weeks_back,
-            warehouse=warehouse,
-        )
+        xyz = (getattr(self, "xyz_classifications", "") or "").strip().upper()
 
-        # Lead days: classification-based percentile with fallbacks
+        # ---- 1) Determine effective ADD and sigma_daily exactly like the SQL ----
+        add_per_day_eff = 0.0
+        sigma_daily_eff = 0.0
+
+        if xyz == "X":
+            # MONTHLY-based demand (same as demand_from_monthly in SQL)
+            avg_m = float(getattr(self, "avg_m_qty", 0) or 0)
+            sd_m = float(getattr(self, "sd_m_qty", 0) or 0)
+            units_365d = float(getattr(self, "units_365d", 0) or 0)
+            if units_365d > 0 and avg_m > 0:
+                add_per_day_eff = units_365d / 365.0
+                # σ_daily_monthly = STDDEV_SAMP(m_qty) / sqrt(365/12)
+                sigma_daily_eff = sd_m / math.sqrt(365.0 / 12.0)
+            self._demand_source = "MONTHLY"
+        else:
+            # WEEKLY-based demand (same as demand_stats in SQL)
+            weeks_back = int(getattr(self, "weeks_back", 52) or 52)  # ≈ 1 year
+            add_per_day_eff, sigma_daily_eff = self._get_demand_stats(
+                item_code=item_code,
+                cost_center=cost_center,
+                weeks_back=weeks_back,
+                warehouse=warehouse,
+            )
+            self._demand_source = "WEEKLY"
+
+        self._effective_add_per_day = add_per_day_eff
+        self._effective_sigma_daily = sigma_daily_eff
+
+        # ---- 2) Lead days L with same fallback chain as note ----
         L = float(self._selected_lead_days() or 0.0)
         if L <= 0:
             # use average lead time computed in compute_p50_lead_days(), then hard fallback 45
@@ -565,11 +603,19 @@ class ItemPlanningPolicy(Document):
 
         Z = self._get_z_value(item_code, cost_center)
 
-        if add_per_day <= 0 or L <= 0 or sigma_daily <= 0:
+        if add_per_day_eff <= 0 or L <= 0 or sigma_daily_eff <= 0:
             self.safety_days = 0.0
             return self.safety_days
 
-        safety_days = (Z * sigma_daily * math.sqrt(L)) / add_per_day
+        # σ during L (B2: demand variance only): σ_DL = sigma_daily_eff * sqrt(L)
+        sigma_during_lt_units = sigma_daily_eff * math.sqrt(L)
+
+        # safety stock (units) = Z * σ_DL  (same as SQL safety_stock_units)
+        safety_stock_units = Z * sigma_during_lt_units
+
+        # Safety days = safety_stock_units / ADD_eff  (same as SQL safety_days)
+        safety_days = safety_stock_units / add_per_day_eff
+
         self.safety_days = round(max(0.0, safety_days), 2)
         return self.safety_days
 
@@ -705,51 +751,74 @@ class ItemPlanningPolicy(Document):
 
     # ---------- 5) MINIMUM INVENTORY QTY ----------
     def compute_minimum_inventory_qty(self, daily: float):
-        """Minimum Inventory Qty = Safety Days × Daily Requirement."""
-        safety_days = getattr(self, "safety_days", 0) or 0
-        daily = daily or 0
-        minimum_qty = safety_days * daily
-        self.minimum_inventory_qty = round(minimum_qty, ROUND_PLACES)
+        """
+        Minimum Inventory Qty = Safety Days × Daily Requirement.
+
+        BUT to match the SQL, Daily Requirement here must be the same ADD used
+        for safety_days (effective ADD). So:
+
+          if _effective_add_per_day > 0:
+              use that as daily_req (matching SQL add_per_day)
+          else:
+              fallback to last-3-month daily (for edge cases)
+        """
+        safety_days = float(getattr(self, "safety_days", 0) or 0)
+        eff_add = float(getattr(self, "_effective_add_per_day", 0) or 0)
+        if eff_add > 0:
+            daily_req = eff_add
+        else:
+            daily_req = float(daily or getattr(self, "daily_requirement", 0) or 0)
+
+        minimum_qty = safety_days * daily_req
+        self.minimum_inventory_qty = round(max(0.0, minimum_qty), ROUND_PLACES)
 
     # ---------- 6) ROL ----------
     def compute_rol(self, daily: float):
         """
-        ROL = (Safety Days + Lead Days) × Daily Requirement.
-        Lead Days chosen dynamically by item_classification (A1/A2 -> P-80; else -> P-50).
-        """
-        safety_days = float(getattr(self, "safety_days", 0) or 0)
-        lead_days = self._selected_lead_days()
-        daily = float(daily or 0)
-        rol_qty = (safety_days + lead_days) * daily
-        self.rol = round(rol_qty, ROUND_PLACES)
+        To match the SQL:
 
-    # ---------- 6.1) Coverage Days from lead (Excel-style) ----------
-    def compute_coverage_days_from_lead(self) -> float:
-        """
-        Excel-style coverage:
-          coverage_days = lead_time_average + selected lead_days
+          ROL (rol_suggested_units) =
+              add_per_day_eff * L + safety_stock_units
 
-        For your example:
-          lead_time_average = 14.08
-          selected lead_days (A2 → P80) = 24
-          → coverage_days = 38.08
+        Where:
+          safety_stock_units = safety_days * add_per_day_eff
+
+        If effective ADD is not available (edge-case), fallback to legacy:
+          ROL = (Safety Days + Lead Days) × Daily Requirement (last-3-month).
         """
-        lt_avg = float(getattr(self, "lead_time_average", 0) or 0)
         L = float(self._selected_lead_days() or 0)
+        safety_days = float(getattr(self, "safety_days", 0) or 0)
+        eff_add = float(getattr(self, "_effective_add_per_day", 0) or 0)
 
-        coverage = lt_avg + L
+        if eff_add > 0 and L > 0 and safety_days >= 0:
+            safety_stock_units = safety_days * eff_add
+            rol_qty = L * eff_add + safety_stock_units
+        else:
+            daily_req = float(daily or getattr(self, "daily_requirement", 0) or 0)
+            rol_qty = (safety_days + L) * daily_req
 
-        if hasattr(self, "coverage_days"):
-            self.coverage_days = round(coverage, 2)
-        return self.coverage_days
+        self.rol = round(max(0.0, rol_qty), ROUND_PLACES)
 
     # ---------- 7) ROQ ----------
     def compute_roq(self, daily: float):
-        """ROQ = Coverage Days × Daily Requirement."""
-        coverage_days = getattr(self, "coverage_days", 0) or 0
-        daily = daily or 0
-        roq = coverage_days * daily
-        self.roq = round(roq, ROUND_PLACES)
+        """
+        ROQ (reorder_qty_new) in SQL:
+
+            ROQ = coverage_days * add_per_day_eff
+
+        So we use effective ADD when available; otherwise fallback to
+        last-3-month daily requirement.
+        """
+        coverage_days = float(getattr(self, "coverage_days", 0) or 0)
+        eff_add = float(getattr(self, "_effective_add_per_day", 0) or 0)
+
+        if eff_add > 0:
+            daily_req = eff_add
+        else:
+            daily_req = float(daily or getattr(self, "daily_requirement", 0) or 0)
+
+        roq = coverage_days * daily_req
+        self.roq = round(max(0.0, roq), ROUND_PLACES)
 
 
 # --------------- Update or Add New Row to Item Re-order ---------------
