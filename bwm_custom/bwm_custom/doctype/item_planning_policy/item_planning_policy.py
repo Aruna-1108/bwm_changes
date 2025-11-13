@@ -340,7 +340,6 @@ class ItemPlanningPolicy(Document):
             days = 40
         elif rec.strip().upper() in {"MTS - LITE", "MTS LITE", "MTSLITE"}:
             days = 20
-
         else:
             days = 0
 
