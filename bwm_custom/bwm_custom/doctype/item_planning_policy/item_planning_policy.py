@@ -17,10 +17,15 @@ class ItemPlanningPolicy(Document):
         Auto-calc on Save (no blocking validation here):
           1) Last-3-Months Sales Qty
           2) Monthly & Daily Requirements  (INFORMATION ONLY; NOT used for ROL/ROQ)
-          3) Lead Days selection (A1/A2 -> P-80, else P-50, with AVG→45 fallback)
+          3) Lead Days (= lt_used_days from SQL logic):
+               - A1/A2 -> COALESCE(P80, AVG, 45)
+               - Others -> COALESCE(P50, AVG, 45)
+             with Warehouse CC field dynamic:
+               - local   : w.custom_cost__center
+               - prod    : w.cost_center
           4) Safety Days (statistical; B2 rule, ignore σL)
           5) Minimum Inventory Qty  (= SafetyDays × ADD from T12/weekly logic)
-          6) ROL (uses selected lead_days + safety_stock_units from T12/weekly logic)
+          6) ROL (uses lt_used_days + safety_stock_units from T12/weekly logic)
           7) ROQ (= coverage_days × ADD from T12/weekly logic)
           8) XYZ Classification (T12 variability)
           9) FSN logic (F/S/N from active months in T12)
@@ -31,7 +36,7 @@ class ItemPlanningPolicy(Document):
         daily_last3 = self.compute_requirements(last3)  # returns daily for display only
 
         # Lead-time stats & item class cache
-        self.compute_p50_lead_days()
+        self.compute_p50_lead_days()              # fills p50, p80, lead_time_average
         self._fetch_and_assign_item_classification()
 
         # XYZ & FSN metrics (T12-based)
@@ -39,15 +44,31 @@ class ItemPlanningPolicy(Document):
         self._t12_customer_invoice_fsn()
 
         # Downstream calcs using lead-days + demand stats (T12 / weekly)
-        self.select_lead_days()
-        self.compute_safety_days()                          # sets safety_days AND _effective_add_per_day
-        self.compute_minimum_inventory_qty(daily_last3)     # uses effective ADD if available
-        self.compute_rol(daily_last3)                       # uses effective ADD if available
+        self.select_lead_days()                   # sets lead_days = lt_used_days
+        self.compute_safety_days()                # sets safety_days AND _effective_add_per_day
+        self.compute_minimum_inventory_qty(daily_last3)
+        self.compute_rol(daily_last3)
 
         # Policy → Coverage → ROQ
         self.compute_policy_recommendation()
         self.apply_coverage_from_policy()
-        self.compute_roq(daily_last3)                       # uses effective ADD if available
+        self.compute_roq(daily_last3)
+
+    # -------------------- Helper: effective cost center field --------------------
+    def _get_effective_cost_center(self) -> str:
+        """
+        Use whichever CC field is present on the DocType:
+          - custom_cost__center (local)
+          - custom_cost_center
+          - cost_center (production / standard)
+        """
+        cc = (
+            getattr(self, "custom_cost__center", None)
+            or getattr(self, "custom_cost_center", None)
+            or getattr(self, "cost_center", None)
+            or ""
+        )
+        return cc.strip()
 
     # -------------------- Helpers to fetch classification from Bucket Branch Detail --------------------
     def _fetch_item_classification_row(self, item_code: str, cost_center: str):
@@ -70,14 +91,12 @@ class ItemPlanningPolicy(Document):
 
     def _fetch_and_assign_item_classification(self):
         """
-        DO NOT CHANGE THIS LOGIC (as per your instruction).
-
-        It reads fine classification directly from Bucket Branch Detail._class:
+        Reads fine classification directly from Bucket Branch Detail._class:
           A1, A2, B1, B2, C ...
         and writes it into self.item_classification.
         """
         item_code = (getattr(self, "item", None) or "").strip()
-        cost_center = (getattr(self, "cost_center", None) or "").strip()
+        cost_center = self._get_effective_cost_center()
         if not item_code or not cost_center:
             return ""
         row = self._fetch_item_classification_row(item_code, cost_center)
@@ -88,7 +107,6 @@ class ItemPlanningPolicy(Document):
         cls = (row.get("_class") or "").strip()
         tier = (row.get("_tier") or "").strip()
         if hasattr(self, "item_classification") and cls:
-            # This is the fine classification: A1, A2, B1, B2, C, etc.
             self.item_classification = cls
         self._tier_value = tier.upper() if tier else ""
         self._class_value = cls.upper() if cls else ""
@@ -97,7 +115,7 @@ class ItemPlanningPolicy(Document):
     # -------------------- XYZ Classification (T12) --------------------
     def compute_xyz_classification(self) -> Tuple[str, Optional[float]]:
         item_code = (getattr(self, "item", "") or "").strip()
-        cost_center = (getattr(self, "cost_center", "") or "").strip()
+        cost_center = self._get_effective_cost_center()
         if not item_code or not cost_center:
             if hasattr(self, "xyz_classifications"):
                 self.xyz_classifications = ""
@@ -177,7 +195,7 @@ class ItemPlanningPolicy(Document):
           - customer_count  (same as customers_t12, for UI)
         """
         item_code = (getattr(self, "item", "") or "").strip()
-        cost_center = (getattr(self, "cost_center", "") or "").strip()
+        cost_center = self._get_effective_cost_center()
         if not item_code or not cost_center:
             if hasattr(self, "fsn_logic"):
                 self.fsn_logic = "N"
@@ -194,7 +212,6 @@ class ItemPlanningPolicy(Document):
         from_date = add_months(getdate(today()), -12)
         to_date = getdate(today())
 
-        # Distinct customers in T12
         sql_cust = """
             SELECT COUNT(DISTINCT si.customer)
             FROM `tabSales Invoice Item` sii
@@ -207,7 +224,6 @@ class ItemPlanningPolicy(Document):
         """
         customers_t12 = int(frappe.db.sql(sql_cust, (item_code, cost_center, from_date, to_date))[0][0] or 0)
 
-        # Distinct invoices in T12
         sql_inv = """
             SELECT COUNT(DISTINCT si.name)
             FROM `tabSales Invoice Item` sii
@@ -219,7 +235,6 @@ class ItemPlanningPolicy(Document):
         """
         invoices_t12 = int(frappe.db.sql(sql_inv, (item_code, cost_center, from_date, to_date))[0][0] or 0)
 
-        # Active months in T12
         sql_months = """
             SELECT COUNT(*) FROM (
               SELECT DATE_FORMAT(si.posting_date, '%%Y-%%m') AS ym, SUM(sii.qty) AS m_qty
@@ -236,7 +251,6 @@ class ItemPlanningPolicy(Document):
         res = frappe.db.sql(sql_months, (item_code, cost_center, from_date, to_date))
         active_months_12 = int((res[0][0] if res else 0) or 0)
 
-        # FSN class based on active months in T12
         if active_months_12 >= 9:
             fsn_logic = "F"
         elif 4 <= active_months_12 <= 8:
@@ -247,7 +261,6 @@ class ItemPlanningPolicy(Document):
         if hasattr(self, "customers_t12"):
             self.customers_t12 = customers_t12
         if hasattr(self, "customer_count"):
-            # UI field for customer count
             self.customer_count = customers_t12
         if hasattr(self, "invoices_t12"):
             self.invoices_t12 = invoices_t12
@@ -261,24 +274,8 @@ class ItemPlanningPolicy(Document):
     # -------------------- Policy Recommendation (MTS / MTS-Lite / MTO) --------------------
     def compute_policy_recommendation(self) -> str:
         """
-        Exactly aligned with SQL policy_pick, but using UI fields
-        customer_count and cv (with T12 fallbacks):
-
-        MTS:
-          abc_fine ∈ {A1, A2}
-          AND xyz_class = 'X'
-          AND fsn_class ∈ {F, S}
-          AND customers_t12 ≥ 2
-
-        MTS-Lite:
-          abc_fine ∈ {A1, A2} AND (
-              (xyz_class ∈ {X, Y} AND fsn_class ∈ {F, S} AND customers_t12 ≥ 2)
-           OR (abc_fine='A1' AND cv_t12 ≤ 1.75 AND customers_t12 ≥ 5 AND active_months_12 ≥ 6)
-          )
-
-        Else: MTO
+        Exactly aligned with SQL policy_pick.
         """
-        # abc_fine: try dedicated field; fallback to item_classification
         abc_fine = (
             (getattr(self, "abc_fine", None)
              or getattr(self, "item_classification", "")
@@ -289,7 +286,6 @@ class ItemPlanningPolicy(Document):
         xyz = (getattr(self, "xyz_classifications", "") or "").strip().upper()
         fsn = (getattr(self, "fsn_logic", "") or "").strip().upper()
 
-        # Prefer UI field customer_count; fallback to customers_t12
         raw_customers = getattr(self, "customer_count", None) if hasattr(self, "customer_count") else None
         if raw_customers is None:
             raw_customers = getattr(self, "customers_t12", 0)
@@ -297,7 +293,6 @@ class ItemPlanningPolicy(Document):
 
         active_m = int(getattr(self, "active_months_12", 0) or 0)
 
-        # Prefer UI field cv; fallback to cv_t12
         raw_cv = getattr(self, "cv", None) if hasattr(self, "cv") else None
         if raw_cv is None:
             raw_cv = getattr(self, "cv_t12", None)
@@ -309,11 +304,9 @@ class ItemPlanningPolicy(Document):
         is_A12 = abc_fine in {"A1", "A2"}
         fsn_good = fsn in {"F", "S"}
 
-        # MTS gate (same as query)
         if is_A12 and xyz == "X" and fsn_good and customers >= 2:
             rec = "MTS"
         else:
-            # MTS-Lite gates (same as query)
             cond_main = (is_A12 and (xyz in {"X", "Y"}) and fsn_good and customers >= 2)
             cond_override = (
                 abc_fine == "A1"
@@ -338,7 +331,7 @@ class ItemPlanningPolicy(Document):
         rec = (getattr(self, "policy_recommendation", "") or "").strip().upper()
         if rec == "MTS":
             days = 40
-        elif rec.strip().upper() in {"MTS - LITE", "MTS LITE", "MTSLITE"}:
+        elif rec in {"MTS - LITE", "MTS LITE", "MTSLITE"}:
             days = 20
         else:
             days = 0
@@ -356,7 +349,7 @@ class ItemPlanningPolicy(Document):
             return 0.0
 
         company: Optional[str] = getattr(self, "company", None)
-        cost_center: Optional[str] = getattr(self, "cost_center", None)
+        cost_center: Optional[str] = self._get_effective_cost_center()
 
         from_date = add_months(getdate(today()), -3)
         to_date = getdate(today())
@@ -397,90 +390,16 @@ class ItemPlanningPolicy(Document):
         self.daily_requirement = round(daily, ROUND_PLACES)
         return daily
 
-    # ---------- 3) LEAD DAYS (legacy median PO -> PR) ----------
-    def compute_lead_days(self) -> float:
-        """
-        Median of (PR.posting_date - PO.transaction_date) in days,
-        using ONLY samples from the last 730 days (to match SQL).
-        (Kept for backward compatibility; main ROP math uses
-         compute_p50_lead_days + _selected_lead_days.)
-        """
-        item_code = (getattr(self, "item", None) or "").strip()
-        company = (getattr(self, "company", None) or "").strip()
-        cost_center = (getattr(self, "cost_center", None) or "").strip() or None
-
-        if not item_code or not company:
-            self.lead_days = 0.0
-            return 0.0
-
-        params = {
-            "item_code": item_code,
-            "company": company,
-            "cost_center": cost_center,
-        }
-
-        sql = """
-            SELECT
-                GREATEST(0, DATEDIFF(fr.first_receipt_date, po.transaction_date)) AS lt_days
-            FROM `tabPurchase Order Item` poi
-            JOIN `tabPurchase Order` po
-                 ON po.name = poi.parent AND po.docstatus = 1
-            JOIN (
-                SELECT
-                    pri.purchase_order_item,
-                    MIN(pr.posting_date) AS first_receipt_date
-                FROM `tabPurchase Receipt Item` pri
-                JOIN `tabPurchase Receipt` pr
-                     ON pr.name = pri.parent AND pr.docstatus = 1
-                WHERE pr.posting_date IS NOT NULL
-                  AND pr.posting_date >= DATE_SUB(CURDATE(), INTERVAL 730 DAY)
-                GROUP BY pri.purchase_order_item
-            ) fr ON fr.purchase_order_item = poi.name
-            JOIN `tabPurchase Receipt Item` pri2
-                 ON pri2.purchase_order_item = poi.name
-            JOIN `tabPurchase Receipt` pr2
-                 ON pr2.name = pri2.parent AND pr2.docstatus = 1
-            WHERE
-                poi.item_code = %(item_code)s
-                AND pr2.company = %(company)s
-                AND pr2.posting_date >= DATE_SUB(CURDATE(), INTERVAL 730 DAY)
-                AND po.transaction_date IS NOT NULL
-                AND fr.first_receipt_date IS NOT NULL
-                AND DATEDIFF(fr.first_receipt_date, po.transaction_date) >= 0
-                AND (
-                    %(cost_center)s IS NULL
-                    OR COALESCE(poi.cost_center, pri2.cost_center) = %(cost_center)s
-                )
-        """
-        rows = frappe.db.sql(sql, params) or []
-        vec = sorted(float(r[0]) for r in rows if r and r[0] is not None)
-
-        if not vec:
-            self.lead_days = 0.0
-            frappe.logger().info({
-                "msg": "Median lead days: no observations (730d window)",
-                "item_code": item_code,
-                "company": company,
-                "cost_center": cost_center,
-            })
-            return 0.0
-
-        n = len(vec)
-        mid = n // 2
-        median_val = vec[mid] if n % 2 else (vec[mid - 1] + vec[mid]) / 2.0
-        self.lead_days = round(median_val, 2)
-        return self.lead_days
-
-    # ---------- 3.1 P-50, P-80, Average lead day ----------
+    # ---------- 3.1 P-50, P-80, Average lead day (MATCHES leadtime_samples CTE) ----------
     def compute_p50_lead_days(self) -> float:
         """
         Compute P50 (median), P80, and AVG lead time from PO->PR samples
-        over the LAST 730 DAYS, matching the SQL leadtime_samples logic:
+        over the LAST 730 DAYS, matching your SQL `leadtime_samples`:
 
-          - Sample: lt_days = GREATEST(0, DATEDIFF(PR.posting_date, PO.transaction_date))
-          - Window: pr.posting_date >= CURDATE() - INTERVAL 730 DAY
-          - P50: median (average of middle 1 or 2 values)
-          - P80: nearest-rank, CEIL(0.80 * n)
+          lt_days = GREATEST(0, DATEDIFF(PR.posting_date, PO.transaction_date))
+          Warehouse CC field:
+            - local   : w.custom_cost__center
+            - prod    : w.cost_center
         """
         def percentile_nearest_rank(sorted_vec, q: float) -> float:
             n = len(sorted_vec)
@@ -492,57 +411,52 @@ class ItemPlanningPolicy(Document):
             return float(sorted_vec[rank - 1])
 
         item_code = (getattr(self, "item", None) or "").strip()
-        company = (getattr(self, "company", None) or "").strip()
-        cost_center = (getattr(self, "cost_center", None) or "").strip() or None
+        cost_center = self._get_effective_cost_center()
 
         def _reset_targets():
             for f in ("lead_days", "p50_lead_days", "p50", "p80", "lead_time_average"):
                 if hasattr(self, f):
                     setattr(self, f, 0.0)
 
-        if not item_code or not company:
+        if not item_code:
             _reset_targets()
             return 0.0
 
+        # Decide which Warehouse CC column exists
+        wh_cc_field = None
+        if frappe.db.has_column("Warehouse", "custom_cost__center"):
+            wh_cc_field = "custom_cost__center"
+        elif frappe.db.has_column("Warehouse", "cost_center"):
+            wh_cc_field = "cost_center"
+
         params = {
             "item_code": item_code,
-            "company": company,
-            "cost_center": cost_center,
         }
+        if cost_center:
+            params["cost_center"] = cost_center
 
-        # MATCHING the 730-day leadtime_samples window in SQL
-        sql = """
+        # WHERE clause for CC filter
+        if wh_cc_field and cost_center:
+            cc_filter = f"AND w.`{wh_cc_field}` = %(cost_center)s"
+        else:
+            cc_filter = ""
+
+        sql = f"""
             SELECT
-                GREATEST(0, DATEDIFF(fr.first_receipt_date, po.transaction_date)) AS lt_days
-            FROM `tabPurchase Order Item` poi
+                GREATEST(0, DATEDIFF(pr.posting_date, po.transaction_date)) AS lt_days
+            FROM `tabPurchase Receipt Item` pri
+            JOIN `tabPurchase Receipt` pr
+                 ON pr.name = pri.parent AND pr.docstatus = 1
             JOIN `tabPurchase Order` po
-                 ON po.name = poi.parent AND po.docstatus = 1
-            JOIN (
-                SELECT
-                    pri.purchase_order_item,
-                    MIN(pr.posting_date) AS first_receipt_date
-                FROM `tabPurchase Receipt Item` pri
-                JOIN `tabPurchase Receipt` pr
-                     ON pr.name = pri.parent AND pr.docstatus = 1
-                WHERE pr.posting_date IS NOT NULL
-                  AND pr.posting_date >= DATE_SUB(CURDATE(), INTERVAL 730 DAY)
-                GROUP BY pri.purchase_order_item
-            ) fr ON fr.purchase_order_item = poi.name
-            JOIN `tabPurchase Receipt Item` pri2
-                 ON pri2.purchase_order_item = poi.name
-            JOIN `tabPurchase Receipt` pr2
-                 ON pr2.name = pri2.parent AND pr2.docstatus = 1
-            WHERE
-                poi.item_code = %(item_code)s
-                AND pr2.company = %(company)s
-                AND pr2.posting_date >= DATE_SUB(CURDATE(), INTERVAL 730 DAY)
-                AND po.transaction_date IS NOT NULL
-                AND fr.first_receipt_date IS NOT NULL
-                AND DATEDIFF(fr.first_receipt_date, po.transaction_date) >= 0
-                AND (
-                    %(cost_center)s IS NULL
-                    OR COALESCE(poi.cost_center, pri2.cost_center) = %(cost_center)s
-                )
+                 ON po.name = pri.purchase_order AND po.docstatus = 1
+            LEFT JOIN `tabWarehouse` w
+                 ON w.name = COALESCE(pri.warehouse, po.set_warehouse)
+            WHERE pri.item_code = %(item_code)s
+              AND pr.posting_date >= DATE_SUB(CURDATE(), INTERVAL 730 DAY)
+              AND pr.posting_date <  DATE_ADD(CURDATE(), INTERVAL 1 DAY)
+              AND po.transaction_date IS NOT NULL
+              AND DATEDIFF(pr.posting_date, po.transaction_date) >= 0
+              {cc_filter}
         """
         rows = frappe.db.sql(sql, params) or []
         vec = sorted(float(r[0]) for r in rows if r and r[0] is not None)
@@ -550,17 +464,16 @@ class ItemPlanningPolicy(Document):
         if not vec:
             _reset_targets()
             frappe.logger().info({
-                "msg": "P50/P80 lead days: no observations (730d window)",
+                "msg": "P50/P80 lead days: no observations (730d, Warehouse CC dynamic)",
                 "item_code": item_code,
-                "company": company,
                 "cost_center": cost_center,
+                "warehouse_cc_field": wh_cc_field,
             })
             return 0.0
 
         n = len(vec)
         mid = n // 2
 
-        # median = average of middle two (for even n) → matches SQL lt_p50
         if n % 2:
             median_val = vec[mid]
         else:
@@ -570,7 +483,6 @@ class ItemPlanningPolicy(Document):
         p80 = round(percentile_nearest_rank(vec, 80.0), 2)
         avg = round(sum(vec) / len(vec), 2)
 
-        # store base stats
         if hasattr(self, "p50_lead_days"):
             self.p50_lead_days = p50
         if hasattr(self, "p50"):
@@ -580,47 +492,59 @@ class ItemPlanningPolicy(Document):
         if hasattr(self, "lead_time_average"):
             self.lead_time_average = avg
 
-        # keep p50 as default display lead_days
-        self.lead_days = p50
+        # we DO NOT set lead_days here; that happens in select_lead_days()
         return p50
 
-    def _selected_lead_days(self) -> float:
+    def _selected_lead_days_and_basis(self) -> Tuple[float, str]:
         """
-        EXACTLY match SQL lt_used_days logic:
+        EXACTLY match SQL lt_used_days / lt_basis logic:
 
         CASE
           WHEN abc_fine IN ('A1','A2')
                THEN COALESCE(P80, AVG, 45)
           ELSE COALESCE(P50, AVG, 45)
         END
-
-        Here abc_fine = self.item_classification (fine class from Bucket Branch Detail).
         """
         ic = (getattr(self, "item_classification", "") or "").strip().upper()
 
-        # p50 / p80 / avg as stored by compute_p50_lead_days()
         p50 = float(getattr(self, "p50", getattr(self, "p50_lead_days", 0)) or 0)
         p80 = float(getattr(self, "p80", 0) or 0)
         avg = float(getattr(self, "lead_time_average", 0) or 0)
 
         if ic in {"A1", "A2"}:
-            # A1/A2 → COALESCE(P80, AVG, 45)
             if p80 > 0:
-                return p80
+                return p80, "P80"
             if avg > 0:
-                return avg
-            return 45.0
+                return avg, "AVG"
+            return 45.0, "FALLBACK_45"
         else:
-            # others → COALESCE(P50, AVG, 45)
             if p50 > 0:
-                return p50
+                return p50, "P50"
             if avg > 0:
-                return avg
-            return 45.0
+                return avg, "AVG"
+            return 45.0, "FALLBACK_45"
 
-    def select_lead_days(self):
-        """Write the chosen lead_days to the doc (A1/A2 -> P-80, else P-50, with AVG→45 fallback)."""
-        self.lead_days = self._selected_lead_days()
+    def select_lead_days(self) -> float:
+        """
+        Final lt_used_days for the DocType, mirrored from SQL:
+
+        - A1/A2 → COALESCE(P80, AVG, 45)
+        - Others → COALESCE(P50, AVG, 45)
+
+        Writes:
+          - lead_days      (for UI, used in downstream math)
+          - lt_used_days   (if field exists)
+          - lt_basis       (if field exists)
+        """
+        lt, basis = self._selected_lead_days_and_basis()
+
+        self.lead_days = float(lt)
+        if hasattr(self, "lt_used_days"):
+            self.lt_used_days = float(lt)
+        if hasattr(self, "lt_basis"):
+            self.lt_basis = basis
+
+        return lt
 
     # ---------- Safety Days (B2 rule, ignore σL) ----------
     def compute_safety_days(self) -> float:
@@ -629,30 +553,12 @@ class ItemPlanningPolicy(Document):
 
           SafetyDays = ( Z * sigma_daily_eff * sqrt(L) ) / ADD_eff
 
-        Where (aligned with SQL):
-
-          If XYZ = 'X':
-            ADD_eff          = units_365d / 365
-            sigma_daily_eff  = sd_m_qty / sqrt(365 / 12)
-          Else (Y/Z):
-            ADD_eff, sigma_daily_eff from weekly issues (Sales Invoice + Delivery Note)
-            over ~52 weeks (≈ 365 days), aggregated ONLY by Item + Cost Center
-            (no warehouse filter).
-
-          L   = selected lead days:
-                  A1/A2 → P80; others → P50; fallback AVG → 45
-          Z   = service factor by classification (_tier/_class)
-
-        Also stores:
-          - self._effective_add_per_day
-          - self._effective_sigma_daily
-          - self._demand_source = 'MONTHLY' or 'WEEKLY'
+        L is lt_used_days / lead_days as selected above.
         """
         item_code = (getattr(self, "item", None) or "").strip()
         company = (getattr(self, "company", None) or "").strip()
-        cost_center = (getattr(self, "cost_center", None) or "").strip()
+        cost_center = self._get_effective_cost_center()
 
-        # reset effective stats
         self._effective_add_per_day = 0.0
         self._effective_sigma_daily = 0.0
         self._demand_source = None
@@ -663,24 +569,19 @@ class ItemPlanningPolicy(Document):
 
         xyz = (getattr(self, "xyz_classifications", "") or "").strip().upper()
 
-        # ---- 1) Determine effective ADD and sigma_daily exactly like the SQL ----
         add_per_day_eff = 0.0
         sigma_daily_eff = 0.0
 
         if xyz == "X":
-            # MONTHLY-based demand (same as demand_from_monthly in SQL)
             avg_m = float(getattr(self, "avg_m_qty", 0) or 0)
             sd_m = float(getattr(self, "sd_m_qty", 0) or 0)
             units_365d = float(getattr(self, "units_365d", 0) or 0)
             if units_365d > 0 and avg_m > 0:
                 add_per_day_eff = units_365d / 365.0
-                # σ_daily_monthly = STDDEV_SAMP(m_qty) / sqrt(365/12)
                 sigma_daily_eff = sd_m / math.sqrt(365.0 / 12.0)
             self._demand_source = "MONTHLY"
         else:
-            # WEEKLY-based demand (same as demand_stats in SQL),
-            # ONLY by Item + Cost Center (no warehouse filter)
-            weeks_back = int(getattr(self, "weeks_back", 52) or 52)  # ≈ 1 year
+            weeks_back = int(getattr(self, "weeks_back", 52) or 52)
             add_per_day_eff, sigma_daily_eff = self._get_demand_stats(
                 item_code=item_code,
                 cost_center=cost_center,
@@ -691,12 +592,12 @@ class ItemPlanningPolicy(Document):
         self._effective_add_per_day = add_per_day_eff
         self._effective_sigma_daily = sigma_daily_eff
 
-        # ---- 2) Lead days L with same fallback chain as SQL lt_used_days ----
-        L = float(self._selected_lead_days() or 0.0)
+        try:
+            L = float(getattr(self, "lead_days", 0) or 0)
+        except Exception:
+            L = 0.0
         if L <= 0:
-            # absolute safety net; should rarely hit because _selected_lead_days already
-            # applies COALESCE(Pxx, AVG, 45)
-            L = float(getattr(self, "lead_time_average", 0) or 45.0)
+            L, _ = self._selected_lead_days_and_basis()
 
         Z = self._get_z_value(item_code, cost_center)
 
@@ -704,13 +605,8 @@ class ItemPlanningPolicy(Document):
             self.safety_days = 0.0
             return self.safety_days
 
-        # σ during L (B2: demand variance only): σ_DL = sigma_daily_eff * sqrt(L)
         sigma_during_lt_units = sigma_daily_eff * math.sqrt(L)
-
-        # safety stock (units) = Z * σ_DL  (same as SQL safety_stock_units)
         safety_stock_units = Z * sigma_during_lt_units
-
-        # Safety days = safety_stock_units / ADD_eff  (same as SQL safety_days)
         safety_days = safety_stock_units / add_per_day_eff
 
         self.safety_days = round(max(0.0, safety_days), 2)
@@ -725,7 +621,7 @@ class ItemPlanningPolicy(Document):
         """
         Returns (E[D] add_per_day, σD sigma_daily) from weekly issues
         (Sales Invoice Items + Delivery Note Items),
-        AGGREGATED ONLY BY Item + Cost Center (NO warehouse filter).
+        aggregated by Item + Cost Center (no warehouse filter).
         """
         params = {
             "item_code": item_code,
@@ -761,7 +657,6 @@ class ItemPlanningPolicy(Document):
             GROUP BY week_start
         """
 
-        # Average & stdev across weekly buckets
         wrapper = f"""
             SELECT
               AVG(week_qty)/7.0          AS add_per_day,
@@ -778,51 +673,6 @@ class ItemPlanningPolicy(Document):
         add_per_day = float(val[0][0] or 0.0)
         sigma_daily = float(val[0][1] or 0.0)
         return (add_per_day, sigma_daily)
-
-    def _get_leadtime_stats(
-        self,
-        item_code: str,
-        company: str,
-        cost_center: str,
-        lt_window_days: int,
-        warehouse: Optional[str] = None
-    ) -> Tuple[float, float]:
-        """Returns (E[L], σL) from PO -> PR samples."""
-        params = {
-            "item_code": item_code,
-            "company": company,
-            "cc": cost_center,
-            "days": lt_window_days,
-            "warehouse": warehouse,
-        }
-        sql = """
-            SELECT
-              AVG(lt_days)    AS avg_lt_days,
-              STDDEV(lt_days) AS sd_lt_days
-            FROM (
-              SELECT
-                GREATEST(0, DATEDIFF(pr.posting_date, po.transaction_date)) AS lt_days
-              FROM `tabPurchase Receipt Item` pri
-              JOIN `tabPurchase Receipt` pr ON pr.name = pri.parent AND pr.docstatus = 1
-              JOIN `tabPurchase Order` po   ON po.name = pri.purchase_order AND po.docstatus = 1
-              LEFT JOIN `tabPurchase Order Item` poi
-                     ON poi.parent = po.name AND poi.item_code = pri.item_code
-              WHERE pri.item_code = %(item_code)s
-                AND pr.company = %(company)s
-                AND pr.posting_date >= DATE_SUB(CURDATE(), INTERVAL %(days)s DAY)
-                AND pr.posting_date <  DATE_ADD(CURDATE(), INTERVAL 1 DAY)
-                AND DATEDIFF(pr.posting_date, po.transaction_date) IS NOT NULL
-                AND DATEDIFF(pr.posting_date, po.transaction_date) >= 0
-                AND ( %(warehouse)s IS NULL OR pri.warehouse = %(warehouse)s )
-                AND COALESCE(poi.cost_center, pri.cost_center) = %(cc)s
-            ) t
-        """
-        val = frappe.db.sql(sql, params)
-        if not val:
-            return (0.0, 0.0)
-        avg_lt = float(val[0][0] or 0.0)
-        sd_lt = float(val[0][1] or 0.0)
-        return (avg_lt, sd_lt)
 
     def _get_z_value(self, item_code: str, cost_center: str) -> float:
         """Map Z from cached _tier/_class; fallback to SQL CASE; default 1.95996."""
@@ -861,13 +711,8 @@ class ItemPlanningPolicy(Document):
         """
         Minimum Inventory Qty = Safety Days × Daily Requirement.
 
-        To match the SQL, Daily Requirement here must be the same ADD used
-        for safety_days (effective ADD). So:
-
-          if _effective_add_per_day > 0:
-              use that as daily_req (matching SQL add_per_day)
-          else:
-              fallback to last-3-month daily (for edge cases)
+        If _effective_add_per_day > 0, use that (matches SQL add_per_day).
+        Else fallback to last-3-month daily.
         """
         safety_days = float(getattr(self, "safety_days", 0) or 0)
         eff_add = float(getattr(self, "_effective_add_per_day", 0) or 0)
@@ -882,7 +727,7 @@ class ItemPlanningPolicy(Document):
     # ---------- 6) ROL ----------
     def compute_rol(self, daily: float):
         """
-        To match the SQL:
+        To match SQL:
 
           ROL (rol_suggested_units) =
               add_per_day_eff * L + safety_stock_units
@@ -890,10 +735,10 @@ class ItemPlanningPolicy(Document):
         Where:
           safety_stock_units = safety_days * add_per_day_eff
 
-        If effective ADD is not available (edge-case), fallback to legacy:
+        If effective ADD is not available, fallback:
           ROL = (Safety Days + Lead Days) × Daily Requirement (last-3-month).
         """
-        L = float(self._selected_lead_days() or 0)
+        L, _ = self._selected_lead_days_and_basis()
         safety_days = float(getattr(self, "safety_days", 0) or 0)
         eff_add = float(getattr(self, "_effective_add_per_day", 0) or 0)
 
@@ -913,8 +758,7 @@ class ItemPlanningPolicy(Document):
 
             ROQ = coverage_days * add_per_day_eff
 
-        So we use effective ADD when available; otherwise fallback to
-        last-3-month daily requirement.
+        Use effective ADD when available; otherwise fallback to last-3-month daily.
         """
         coverage_days = float(getattr(self, "coverage_days", 0) or 0)
         eff_add = float(getattr(self, "_effective_add_per_day", 0) or 0)
