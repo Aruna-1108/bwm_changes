@@ -21,6 +21,8 @@
   "active",
   "coverage_days",
   "item_classification",
+  "customer_count",
+  "cv",
   "policy_recommendation",
   "xyz_classifications",
   "fsn_logic",
@@ -219,12 +221,24 @@
    "label": "FSN Logic",
    "options": "\nF\nS\nN",
    "read_only": 1
+  },
+  {
+   "fieldname": "customer_count",
+   "fieldtype": "Data",
+   "label": "Customer Count",
+   "read_only": 1
+  },
+  {
+   "fieldname": "cv",
+   "fieldtype": "Data",
+   "label": "cv",
+   "read_only": 1
   }
  ],
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2025-11-13 09:38:43.417026",
+ "modified": "2025-11-13 17:22:24.573473",
  "modified_by": "Administrator",
  "module": "Bwm Custom",
  "name": "Item Planning Policy",
