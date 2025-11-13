@@ -5,12 +5,10 @@
  "doctype": "DocType",
  "engine": "InnoDB",
  "field_order": [
-  "company",
   "item",
   "cost_center",
   "column_break_oiet",
-  "strategy",
-  "coverage_days",
+  "company",
   "section_break_w6gl",
   "safety_days",
   "window__days",
@@ -21,8 +19,11 @@
   "minimum_inventory_qty",
   "column_break_fhae",
   "active",
+  "coverage_days",
   "item_classification",
   "policy_recommendation",
+  "xyz_classifications",
+  "fsn_logic",
   "rol",
   "roq",
   "last_3_month_sales_qty",
@@ -64,12 +65,6 @@
    "fieldtype": "Column Break"
   },
   {
-   "fieldname": "strategy",
-   "fieldtype": "Select",
-   "label": "Strategy",
-   "options": "\nMTO\nMTS"
-  },
-  {
    "fieldname": "request_for_warehouse",
    "fieldtype": "Link",
    "in_list_view": 1,
@@ -103,7 +98,8 @@
   {
    "fieldname": "coverage_days",
    "fieldtype": "Float",
-   "label": "Coverage Days"
+   "label": "Coverage Days",
+   "read_only": 1
   },
   {
    "fieldname": "window__days",
@@ -155,6 +151,7 @@
   {
    "fieldname": "lead_days",
    "fieldtype": "Float",
+   "hidden": 1,
    "label": "Lead Days",
    "read_only": 1
   },
@@ -199,19 +196,35 @@
    "fieldname": "item_classification",
    "fieldtype": "Select",
    "label": "Item Classification",
-   "options": "\nA1\nA2\nB1\nB2\nC"
+   "options": "\nA1\nA2\nB1\nB2\nC",
+   "read_only": 1
   },
   {
    "fieldname": "policy_recommendation",
    "fieldtype": "Select",
    "label": "Policy Recommendation",
-   "options": "\nMTS\nMTS - Lite"
+   "options": "\nMTS\nMTS - Lite\nMTO",
+   "read_only": 1
+  },
+  {
+   "fieldname": "xyz_classifications",
+   "fieldtype": "Select",
+   "label": "XYZ Classifications",
+   "options": "\nX\nY\nZ",
+   "read_only": 1
+  },
+  {
+   "fieldname": "fsn_logic",
+   "fieldtype": "Select",
+   "label": "FSN Logic",
+   "options": "\nF\nS\nN",
+   "read_only": 1
   }
  ],
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2025-11-11 11:31:06.646028",
+ "modified": "2025-11-13 09:38:43.417026",
  "modified_by": "Administrator",
  "module": "Bwm Custom",
  "name": "Item Planning Policy",
