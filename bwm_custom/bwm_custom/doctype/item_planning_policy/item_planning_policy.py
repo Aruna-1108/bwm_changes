@@ -17,7 +17,7 @@ class ItemPlanningPolicy(Document):
         Auto-calc on Save (no blocking validation here):
           1) Last-3-Months Sales Qty
           2) Monthly & Daily Requirements  (INFORMATION ONLY; NOT used for ROL/ROQ)
-          3) Lead Days selection (A1/A2 -> P-80, else P-50)
+          3) Lead Days selection (A1/A2 -> P-80, else P-50, with AVG→45 fallback)
           4) Safety Days (statistical; B2 rule, ignore σL)
           5) Minimum Inventory Qty  (= SafetyDays × ADD from T12/weekly logic)
           6) ROL (uses selected lead_days + safety_stock_units from T12/weekly logic)
@@ -358,6 +358,7 @@ class ItemPlanningPolicy(Document):
     def compute_lead_days(self) -> float:
         """
         Median of (PR.posting_date - PO.transaction_date) in days.
+        (Kept for backward compatibility; main ROP math uses compute_p50_lead_days + _selected_lead_days.)
         """
         item_code = (getattr(self, "item", None) or "").strip()
         company = (getattr(self, "company", None) or "").strip()
@@ -456,6 +457,9 @@ class ItemPlanningPolicy(Document):
             "cost_center": cost_center,
         }
 
+        # NOTE: This uses all history for the item/company/cost_center combo.
+        # If you want to mimic the 730-day window of the big SQL exactly,
+        # you can add a pr.posting_date filter into this query.
         sql = """
             SELECT
                 GREATEST(0, DATEDIFF(fr.first_receipt_date, po.transaction_date)) AS lt_days
@@ -496,7 +500,7 @@ class ItemPlanningPolicy(Document):
         p80 = round(percentile_nearest_rank(vec, 80.0), 2)
         avg = round(sum(vec) / len(vec), 2)
 
-        self.lead_days = p50
+        # store base stats
         if hasattr(self, "p50_lead_days"):
             self.p50_lead_days = p50
         if hasattr(self, "p50"):
@@ -506,24 +510,43 @@ class ItemPlanningPolicy(Document):
         if hasattr(self, "lead_time_average"):
             self.lead_time_average = avg
 
+        # don't decide selected L here; that's done in _selected_lead_days
+        self.lead_days = p50  # keep for backward display
         return p50
 
     def _selected_lead_days(self) -> float:
         """
-        - A1/A2  -> P-80 (if available), else P-50, else current lead_days, else 0
-        - Others -> P-50 (if available), else current lead_days, else 0
+        EXACTLY match SQL lt_used_days logic:
+
+        CASE
+          WHEN abc_fine IN ('A1','A2')
+               THEN COALESCE(P80, AVG, 45)
+          ELSE COALESCE(P50, AVG, 45)
+        END
         """
         ic = (getattr(self, "item_classification", "") or "").strip().upper()
+        # p50 / p80 / avg as stored by compute_p50_lead_days()
         p50 = float(getattr(self, "p50", getattr(self, "p50_lead_days", 0)) or 0)
         p80 = float(getattr(self, "p80", 0) or 0)
-        current = float(getattr(self, "lead_days", 0) or 0)
+        avg = float(getattr(self, "lead_time_average", 0) or 0)
+
         if ic in {"A1", "A2"}:
-            return p80 if p80 > 0 else (p50 if p50 > 0 else current)
+            # A1/A2 → COALESCE(P80, AVG, 45)
+            if p80 > 0:
+                return p80
+            if avg > 0:
+                return avg
+            return 45.0
         else:
-            return p50 if p50 > 0 else (current if current > 0 else 0.0)
+            # others → COALESCE(P50, AVG, 45)
+            if p50 > 0:
+                return p50
+            if avg > 0:
+                return avg
+            return 45.0
 
     def select_lead_days(self):
-        """Write the chosen lead_days to the doc (A1/A2 -> P-80, else P-50)."""
+        """Write the chosen lead_days to the doc (A1/A2 -> P-80, else P-50, with AVG→45 fallback)."""
         self.lead_days = self._selected_lead_days()
 
     # ---------- Safety Days (B2 rule, ignore σL) ----------
@@ -595,10 +618,11 @@ class ItemPlanningPolicy(Document):
         self._effective_add_per_day = add_per_day_eff
         self._effective_sigma_daily = sigma_daily_eff
 
-        # ---- 2) Lead days L with same fallback chain as note ----
+        # ---- 2) Lead days L with same fallback chain as SQL lt_used_days ----
         L = float(self._selected_lead_days() or 0.0)
         if L <= 0:
-            # use average lead time computed in compute_p50_lead_days(), then hard fallback 45
+            # absolute safety net; should rarely hit because _selected_lead_days already
+            # applies COALESCE(Pxx, AVG, 45)
             L = float(getattr(self, "lead_time_average", 0) or 45.0)
 
         Z = self._get_z_value(item_code, cost_center)
