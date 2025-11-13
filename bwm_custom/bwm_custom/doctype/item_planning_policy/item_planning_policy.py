@@ -24,7 +24,8 @@ class ItemPlanningPolicy(Document):
           7) ROQ
           8) XYZ Classification (T12 variability)
           9) FSN logic (F/S/N from active months in T12)
-         10) Policy recommendation (MTS / MTS-Lite / MTO) → Coverage Days
+         10) Policy recommendation (MTS / MTS-Lite / MTO)
+         11) Coverage Days (Excel-style: lead_time_average + selected lead_days)
         """
         # Demand base
         last3 = self.compute_last3_sales_qty()
@@ -44,9 +45,11 @@ class ItemPlanningPolicy(Document):
         self.compute_minimum_inventory_qty(daily)
         self.compute_rol(daily)
 
-        # Policy → Coverage → ROQ
+        # Policy (for reporting/classification only)
         self.compute_policy_recommendation()
-        self.apply_coverage_from_policy()
+
+        # Coverage (Excel-style) → ROQ
+        self.compute_coverage_days_from_lead()
         self.compute_roq(daily)
 
     # -------------------- Helpers to fetch classification from Bucket Branch Detail --------------------
@@ -284,13 +287,15 @@ class ItemPlanningPolicy(Document):
             self.policy_recommendation = rec
         return rec
 
-    # ---------------- Coverage Days from Policy ----------------
+    # ---------------- Coverage Days from Policy (NOT USED IN VALIDATE NOW) ----------------
     def apply_coverage_from_policy(self) -> int:
         """
         Map policy_recommendation → coverage_days.
           - MTS       : 40
           - MTS-Lite  : 20
           - else (MTO): 0
+
+        NOTE: This is kept for reference but not called from validate().
         """
         rec = (getattr(self, "policy_recommendation", "") or "").strip().upper()
         if rec == "MTS":
@@ -717,6 +722,26 @@ class ItemPlanningPolicy(Document):
         daily = float(daily or 0)
         rol_qty = (safety_days + lead_days) * daily
         self.rol = round(rol_qty, ROUND_PLACES)
+
+    # ---------- 6.1) Coverage Days from lead (Excel-style) ----------
+    def compute_coverage_days_from_lead(self) -> float:
+        """
+        Excel-style coverage:
+          coverage_days = lead_time_average + selected lead_days
+
+        For your example:
+          lead_time_average = 14.08
+          selected lead_days (A2 → P80) = 24
+          → coverage_days = 38.08
+        """
+        lt_avg = float(getattr(self, "lead_time_average", 0) or 0)
+        L = float(self._selected_lead_days() or 0)
+
+        coverage = lt_avg + L
+
+        if hasattr(self, "coverage_days"):
+            self.coverage_days = round(coverage, 2)
+        return self.coverage_days
 
     # ---------- 7) ROQ ----------
     def compute_roq(self, daily: float):
