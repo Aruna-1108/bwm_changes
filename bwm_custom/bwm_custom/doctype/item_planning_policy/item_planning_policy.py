@@ -40,14 +40,14 @@ class ItemPlanningPolicy(Document):
 
         # Downstream calcs using lead-days + demand stats (T12 / weekly)
         self.select_lead_days()
-        self.compute_safety_days()          # sets safety_days AND _effective_add_per_day
-        self.compute_minimum_inventory_qty(daily_last3)  # uses effective ADD if available
-        self.compute_rol(daily_last3)                    # uses effective ADD if available
+        self.compute_safety_days()                          # sets safety_days AND _effective_add_per_day
+        self.compute_minimum_inventory_qty(daily_last3)     # uses effective ADD if available
+        self.compute_rol(daily_last3)                       # uses effective ADD if available
 
         # Policy → Coverage → ROQ
         self.compute_policy_recommendation()
         self.apply_coverage_from_policy()
-        self.compute_roq(daily_last3)                    # uses effective ADD if available
+        self.compute_roq(daily_last3)                       # uses effective ADD if available
 
     # -------------------- Helpers to fetch classification from Bucket Branch Detail --------------------
     def _fetch_item_classification_row(self, item_code: str, cost_center: str):
@@ -69,6 +69,13 @@ class ItemPlanningPolicy(Document):
         return val[0]
 
     def _fetch_and_assign_item_classification(self):
+        """
+        DO NOT CHANGE THIS LOGIC (as per your instruction).
+
+        It reads fine classification directly from Bucket Branch Detail._class:
+          A1, A2, B1, B2, C ...
+        and writes it into self.item_classification.
+        """
         item_code = (getattr(self, "item", None) or "").strip()
         cost_center = (getattr(self, "cost_center", None) or "").strip()
         if not item_code or not cost_center:
@@ -81,6 +88,7 @@ class ItemPlanningPolicy(Document):
         cls = (row.get("_class") or "").strip()
         tier = (row.get("_tier") or "").strip()
         if hasattr(self, "item_classification") and cls:
+            # This is the fine classification: A1, A2, B1, B2, C, etc.
             self.item_classification = cls
         self._tier_value = tier.upper() if tier else ""
         self._class_value = cls.upper() if cls else ""
@@ -95,6 +103,8 @@ class ItemPlanningPolicy(Document):
                 self.xyz_classifications = ""
             if hasattr(self, "cv_t12"):
                 self.cv_t12 = None
+            if hasattr(self, "cv"):
+                self.cv = None
             if hasattr(self, "avg_m_qty"):
                 self.avg_m_qty = 0.0
             if hasattr(self, "sd_m_qty"):
@@ -145,6 +155,8 @@ class ItemPlanningPolicy(Document):
             self.sd_m_qty = round(sd_m, ROUND_PLACES)
         if hasattr(self, "cv_t12"):
             self.cv_t12 = round(cv, 3) if cv is not None else None
+        if hasattr(self, "cv"):
+            self.cv = round(cv, 3) if cv is not None else None
         if hasattr(self, "xyz_classifications"):
             self.xyz_classifications = xyz
         if hasattr(self, "units_365d"):
@@ -160,12 +172,23 @@ class ItemPlanningPolicy(Document):
           - invoices_t12    = distinct invoices in last 12 months
           - active_months_12= months in T12 where qty >= 1
           - fsn_logic       → F (>=9) , S (4–8) , N (<=3)
+
+        Also writes:
+          - customer_count  (same as customers_t12, for UI)
         """
         item_code = (getattr(self, "item", "") or "").strip()
         cost_center = (getattr(self, "cost_center", "") or "").strip()
         if not item_code or not cost_center:
             if hasattr(self, "fsn_logic"):
                 self.fsn_logic = "N"
+            if hasattr(self, "customers_t12"):
+                self.customers_t12 = 0
+            if hasattr(self, "customer_count"):
+                self.customer_count = 0
+            if hasattr(self, "invoices_t12"):
+                self.invoices_t12 = 0
+            if hasattr(self, "active_months_12"):
+                self.active_months_12 = 0
             return (0, 0, 0, "N")
 
         from_date = add_months(getdate(today()), -12)
@@ -223,6 +246,9 @@ class ItemPlanningPolicy(Document):
 
         if hasattr(self, "customers_t12"):
             self.customers_t12 = customers_t12
+        if hasattr(self, "customer_count"):
+            # UI field for customer count
+            self.customer_count = customers_t12
         if hasattr(self, "invoices_t12"):
             self.invoices_t12 = invoices_t12
         if hasattr(self, "active_months_12"):
@@ -235,7 +261,8 @@ class ItemPlanningPolicy(Document):
     # -------------------- Policy Recommendation (MTS / MTS-Lite / MTO) --------------------
     def compute_policy_recommendation(self) -> str:
         """
-        Exactly aligned with SQL policy_pick:
+        Exactly aligned with SQL policy_pick, but using UI fields
+        customer_count and cv (with T12 fallbacks):
 
         MTS:
           abc_fine ∈ {A1, A2}
@@ -252,14 +279,30 @@ class ItemPlanningPolicy(Document):
         Else: MTO
         """
         # abc_fine: try dedicated field; fallback to item_classification
-        abc_fine = (getattr(self, "abc_fine", None) or getattr(self, "item_classification", "") or "").strip().upper()
+        abc_fine = (
+            (getattr(self, "abc_fine", None)
+             or getattr(self, "item_classification", "")
+             or "")
+            .strip()
+            .upper()
+        )
         xyz = (getattr(self, "xyz_classifications", "") or "").strip().upper()
         fsn = (getattr(self, "fsn_logic", "") or "").strip().upper()
-        customers = int(getattr(self, "customers_t12", 0) or 0)      # T12-based
-        active_m = int(getattr(self, "active_months_12", 0) or 0)    # T12-based
-        cv = getattr(self, "cv_t12", None)
+
+        # Prefer UI field customer_count; fallback to customers_t12
+        raw_customers = getattr(self, "customer_count", None) if hasattr(self, "customer_count") else None
+        if raw_customers is None:
+            raw_customers = getattr(self, "customers_t12", 0)
+        customers = int(raw_customers or 0)
+
+        active_m = int(getattr(self, "active_months_12", 0) or 0)
+
+        # Prefer UI field cv; fallback to cv_t12
+        raw_cv = getattr(self, "cv", None) if hasattr(self, "cv") else None
+        if raw_cv is None:
+            raw_cv = getattr(self, "cv_t12", None)
         try:
-            cv = float(cv) if cv is not None else None
+            cv = float(raw_cv) if raw_cv is not None else None
         except Exception:
             cv = None
 
@@ -550,8 +593,11 @@ class ItemPlanningPolicy(Document):
                THEN COALESCE(P80, AVG, 45)
           ELSE COALESCE(P50, AVG, 45)
         END
+
+        Here abc_fine = self.item_classification (fine class from Bucket Branch Detail).
         """
         ic = (getattr(self, "item_classification", "") or "").strip().upper()
+
         # p50 / p80 / avg as stored by compute_p50_lead_days()
         p50 = float(getattr(self, "p50", getattr(self, "p50_lead_days", 0)) or 0)
         p80 = float(getattr(self, "p80", 0) or 0)
@@ -742,7 +788,13 @@ class ItemPlanningPolicy(Document):
         warehouse: Optional[str] = None
     ) -> Tuple[float, float]:
         """Returns (E[L], σL) from PO -> PR samples."""
-        params = {"item_code": item_code, "company": company, "cc": cost_center, "days": lt_window_days, "warehouse": warehouse}
+        params = {
+            "item_code": item_code,
+            "company": company,
+            "cc": cost_center,
+            "days": lt_window_days,
+            "warehouse": warehouse,
+        }
         sql = """
             SELECT
               AVG(lt_days)    AS avg_lt_days,
