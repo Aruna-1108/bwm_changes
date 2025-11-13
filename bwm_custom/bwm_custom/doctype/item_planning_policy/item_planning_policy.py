@@ -238,16 +238,16 @@ class ItemPlanningPolicy(Document):
         Exactly aligned with SQL policy_pick:
 
         MTS:
-          abc_fine ∈ {A1, A2}
-          AND xyz_class = 'X'
-          AND fsn_class ∈ {F, S}
-          AND customers_t12 ≥ 2
+        abc_fine ∈ {A1, A2}
+        AND xyz_class = 'X'
+        AND fsn_class ∈ {F, S}
+        AND customers_t12 ≥ 2
 
         MTS-Lite:
-          abc_fine ∈ {A1, A2} AND (
-              (xyz_class ∈ {X, Y} AND fsn_class ∈ {F, S} AND customers_t12 ≥ 2)
-           OR (abc_fine='A1' AND cv_t12 ≤ 1.75 AND customers_t12 ≥ 5 AND active_months_12 ≥ 6)
-          )
+        abc_fine ∈ {A1, A2} AND (
+            (xyz_class ∈ {X, Y} AND fsn_class ∈ {F, S} AND customers_t12 ≥ 2)
+        OR (abc_fine='A1' AND cv_t12 ≤ 1.75 AND customers_t12 ≥ 5 AND active_months_12 ≥ 6)
+        )
 
         Else: MTO
         """
@@ -266,19 +266,31 @@ class ItemPlanningPolicy(Document):
         is_A12 = abc_fine in {"A1", "A2"}
         fsn_good = fsn in {"F", "S"}
 
-        # MTS gate (same as query)
+        # ---------------- MTS ----------------
         if is_A12 and xyz == "X" and fsn_good and customers >= 2:
             rec = "MTS"
+
         else:
-            # MTS-Lite gates (same as query)
-            cond_main = (is_A12 and (xyz in {"X", "Y"}) and fsn_good and customers >= 2)
+            # ------------- MAIN MTS-Lite condition -------------
+            cond_main = (
+                is_A12
+                and (xyz in {"X", "Y"})
+                and fsn_good
+                and customers >= 2
+            )
+
+            # ------------- OVERRIDE RULE (Corrected) -------------
             cond_override = (
                 abc_fine == "A1"
                 and (cv is not None and cv <= 1.75)
-                and customers >= 5
-                and active_m >= 6
+                and customers >= 2
+                and 4 <= active_m <= 8          # FSN = S window
             )
-            rec = "MTS-Lite" if (cond_main or cond_override) else "MTO"
+
+            if cond_main or cond_override:
+                rec = "MTS-Lite"
+            else:
+                rec = "MTO"
 
         if hasattr(self, "policy_recommendation"):
             self.policy_recommendation = rec
