@@ -598,15 +598,26 @@ class ItemPlanningPolicy(Document):
         sigma_daily_eff = 0.0
 
         if xyz == "X":
-            # MONTHLY-based demand
+            # MONTHLY-based demand (primary path)
             avg_m = float(getattr(self, "avg_m_qty", 0) or 0)
             sd_m = float(getattr(self, "sd_m_qty", 0) or 0)
             units_365d = float(getattr(self, "units_365d", 0) or 0)
-            if units_365d > 0 and avg_m > 0:
+
+            if units_365d > 0 and avg_m > 0 and sd_m > 0:
+                # ADD = SUM(monthly qty) / 365
                 add_per_day_eff = units_365d / 365.0
                 # σ_daily_monthly = STDDEV_SAMP(m_qty) / sqrt(365/12)
                 sigma_daily_eff = sd_m / math.sqrt(365.0 / 12.0)
-            self._demand_source = "MONTHLY"
+                self._demand_source = "MONTHLY"
+            else:
+                # Fallback: WEEKLY-based demand if monthly stats are missing/zero
+                weeks_back = int(getattr(self, "weeks_back", 52) or 52)
+                add_per_day_eff, sigma_daily_eff = self._get_demand_stats(
+                    item_code=item_code,
+                    cost_center=cost_center,
+                    weeks_back=weeks_back,
+                )
+                self._demand_source = "WEEKLY_FALLBACK"
         else:
             # WEEKLY-based demand – matches SQL demand_weekly_365 + demand_stats
             weeks_back = int(getattr(self, "weeks_back", 52) or 52)  # kept for UI, but we use 365d window
