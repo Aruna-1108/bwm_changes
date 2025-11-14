@@ -20,9 +20,9 @@ class ItemPlanningPolicy(Document):
           3) Lead Days (= lt_used_days from SQL logic):
                - A1/A2 -> COALESCE(P80, AVG, 45)
                - Others -> COALESCE(P50, AVG, 45)
-             with Warehouse CC field dynamic:
-               - local   : w.custom_cost__center
-               - prod    : w.cost_center
+             with Warehouse CC field chosen dynamically:
+               - prefer w.cost_center (if exists)
+               - else w.custom_cost__center
           4) Safety Days (statistical; B2 rule, ignore σL)
           5) Minimum Inventory Qty  (= SafetyDays × ADD from T12/weekly logic)
           6) ROL (uses lt_used_days + safety_stock_units from T12/weekly logic)
@@ -30,10 +30,6 @@ class ItemPlanningPolicy(Document):
           8) XYZ Classification (T12 variability)
           9) FSN logic (F/S/N from active months in T12)
          10) Policy recommendation (MTS / MTS-Lite / MTO) → Coverage Days
-             - MTS        : 60 days
-             - MTS-Lite A : 20 days
-             - MTS-Lite B1: 15 days
-             - MTO        : 0 days
         """
         # Demand base (last-3-months, purely informational)
         last3 = self.compute_last3_sales_qty()
@@ -98,10 +94,6 @@ class ItemPlanningPolicy(Document):
         Reads fine classification directly from Bucket Branch Detail._class:
           A1, A2, B1, B2, C ...
         and writes it into self.item_classification.
-        Also caches:
-          - self._tier_value
-          - self._class_value
-        for later Z-value selection.
         """
         item_code = (getattr(self, "item", None) or "").strip()
         cost_center = self._get_effective_cost_center()
@@ -168,7 +160,6 @@ class ItemPlanningPolicy(Document):
             units_365d = sum(monthly_vals)
             cv = (sd_m / avg_m) if avg_m > 0 else None
 
-            # thresholds exactly from sheet: X < 0.75; Y <= 1.25; else Z
             if avg_m == 0 or cv is None:
                 xyz = "Z"
             elif cv <= 0.75:
@@ -293,12 +284,8 @@ class ItemPlanningPolicy(Document):
     # -------------------- Policy Recommendation (MTS / MTS-Lite / MTO) --------------------
     def compute_policy_recommendation(self) -> str:
         """
-        Approximate Python mirror of SQL policy_pick:
-
-          - A1/A2, xyz='X', FSN in (F,S), customers>=2, top_cust_share<=0.65 → MTS
-          - A1/A2, xyz IN ('X','Y'), FSN in (F,S), customers>=2 → MTS-Lite (main)
-          - A1 strategic override (cv<=1.75, customers>=5, active_months>=6) → MTS-Lite
-          - B1 breadth handled in coverage_days (15 days) via classification.
+        Exactly aligned with simplified SQL policy_pick
+        (A1/A2 MTS / MTS-Lite, else MTO).
         """
         # abc_fine: try dedicated field; fallback to item_classification
         abc_fine = (
@@ -331,11 +318,11 @@ class ItemPlanningPolicy(Document):
         is_A12 = abc_fine in {"A1", "A2"}
         fsn_good = fsn in {"F", "S"}
 
-        # MTS gate (from sheet)
+        # MTS gate (same as query)
         if is_A12 and xyz == "X" and fsn_good and customers >= 2:
             rec = "MTS"
         else:
-            # MTS-Lite gates (main + strategic override for A1)
+            # MTS-Lite gates (same as query)
             cond_main = (is_A12 and (xyz in {"X", "Y"}) and fsn_good and customers >= 2)
             cond_override = (
                 abc_fine == "A1"
@@ -352,30 +339,16 @@ class ItemPlanningPolicy(Document):
     # ---------------- Coverage Days from Policy ----------------
     def apply_coverage_from_policy(self) -> int:
         """
-        Map policy_recommendation + fine ABC to coverage_days.
-
-          - MTS                 : 60
-          - MTS-Lite (A1/A2/others) : 20
-          - MTS-Lite for B1     : 15
-          - else (MTO)          : 0
+        Map policy_recommendation → coverage_days.
+          - MTS       : 40
+          - MTS-Lite  : 20
+          - else (MTO): 0
         """
         rec = (getattr(self, "policy_recommendation", "") or "").strip().upper()
-        abc_fine = (
-            (getattr(self, "abc_fine", None)
-             or getattr(self, "item_classification", "")
-             or "")
-            .strip()
-            .upper()
-        )
-
         if rec == "MTS":
-            days = 60
+            days = 40
         elif rec in {"MTS - LITE", "MTS LITE", "MTSLITE"}:
-            # Special narrower coverage for B1 breadth items
-            if abc_fine == "B1":
-                days = 15
-            else:
-                days = 20
+            days = 20
         else:
             days = 0
 
@@ -440,9 +413,10 @@ class ItemPlanningPolicy(Document):
         over the LAST 730 DAYS, matching your SQL `leadtime_samples`:
 
           lt_days = GREATEST(0, DATEDIFF(PR.posting_date, PO.transaction_date))
-          Warehouse CC field:
-            - local   : w.custom_cost__center
-            - prod    : w.cost_center
+
+        Warehouse CC column is chosen dynamically:
+          - prefer Warehouse.cost_center
+          - else Warehouse.custom_cost__center
         """
 
         def percentile_nearest_rank(sorted_vec, q: float) -> float:
@@ -468,17 +442,14 @@ class ItemPlanningPolicy(Document):
 
         # Decide which Warehouse CC column exists
         wh_cc_field = None
-        if frappe.db.has_column("Warehouse", "custom_cost__center"):
-            wh_cc_field = "custom_cost__center"
-        elif frappe.db.has_column("Warehouse", "cost_center"):
+        if frappe.db.has_column("Warehouse", "cost_center"):
             wh_cc_field = "cost_center"
+        elif frappe.db.has_column("Warehouse", "custom_cost__center"):
+            wh_cc_field = "custom_cost__center"
 
         params = {"item_code": item_code}
-        if cost_center:
+        if cost_center and wh_cc_field:
             params["cost_center"] = cost_center
-
-        # WHERE clause for CC filter
-        if wh_cc_field and cost_center:
             cc_filter = f"AND w.`{wh_cc_field}` = %(cost_center)s"
         else:
             cc_filter = ""
@@ -552,8 +523,9 @@ class ItemPlanningPolicy(Document):
         """
         ic = (getattr(self, "item_classification", "") or "").strip().upper()
         abc_fine = (getattr(self, "abc_fine", "") or "").strip().upper()
+        # prefer fine ABC if present
         if abc_fine:
-            ic = abc_fine  # prefer explicit fine ABC from UI
+            ic = abc_fine
 
         # p50 / p80 / avg as stored by compute_p50_lead_days()
         p50 = float(getattr(self, "p50", getattr(self, "p50_lead_days", 0)) or 0)
@@ -602,26 +574,9 @@ class ItemPlanningPolicy(Document):
         """
         B2 rule (ignore lead-time variability):
 
-          Demand granularity from sheet:
-            - xyz = 'X'   → monthly demand
-            - xyz IN('Y','Z') → weekly demand
+          SafetyDays = ( Z * sigma_daily_eff * sqrt(L) ) / ADD_eff
 
-          Effective demand stats (ADD_eff, sigma_daily_eff):
-
-            For X (monthly):
-              ADD_eff          = units_365d / 365
-              sigma_daily_eff  = SD(monthly_qty) / sqrt(365/12)
-
-            For Y/Z (weekly):
-              ADD_eff, sigma_daily_eff from _get_demand_stats()
-              (weekly issues of Sales Invoice + Delivery Note).
-
-          Safety stock (units) from sheet:
-            safety_stock_units = Z * sqrt( L * sigma_daily_eff^2 )
-                               = Z * sigma_daily_eff * sqrt(L)
-
-          Safety days:
-            safety_days = safety_stock_units / ADD_eff
+        L is lt_used_days / lead_days as selected above.
         """
         item_code = (getattr(self, "item", None) or "").strip()
         company = (getattr(self, "company", None) or "").strip()
@@ -653,8 +608,8 @@ class ItemPlanningPolicy(Document):
                 sigma_daily_eff = sd_m / math.sqrt(365.0 / 12.0)
             self._demand_source = "MONTHLY"
         else:
-            # WEEKLY-based demand (xyz in Y/Z)
-            weeks_back = int(getattr(self, "weeks_back", 52) or 52)  # ≈ 1 year
+            # WEEKLY-based demand – matches SQL demand_weekly_365 + demand_stats
+            weeks_back = int(getattr(self, "weeks_back", 52) or 52)  # kept for UI, but we use 365d window
             add_per_day_eff, sigma_daily_eff = self._get_demand_stats(
                 item_code=item_code,
                 cost_center=cost_center,
@@ -682,7 +637,7 @@ class ItemPlanningPolicy(Document):
         # σ during L (B2: demand variance only): σ_DL = sigma_daily_eff * sqrt(L)
         sigma_during_lt_units = sigma_daily_eff * math.sqrt(L)
 
-        # safety stock (units) = Z * σ_DL  = Z * sqrt(L * sigma_daily_eff^2)
+        # safety stock (units) = Z * σ_DL
         safety_stock_units = Z * sigma_during_lt_units
 
         # Safety days = safety_stock_units / ADD_eff
@@ -698,102 +653,138 @@ class ItemPlanningPolicy(Document):
         weeks_back: int,
     ) -> Tuple[float, float]:
         """
-        Returns (E[D] add_per_day, σD sigma_daily) from weekly issues
-        (Sales Invoice Items + Delivery Note Items),
-        aggregated by Item + Cost Center (no warehouse filter).
+        Returns (E[D] add_per_day, σD sigma_daily) from weekly issues,
+        following the SQL demand_weekly_365 + demand_stats logic:
+
+          - Source: Stock Ledger Entry (SLE)
+          - Window: last 365 days
+          - Bucket: YEARWEEK(posting_date, 3)
+          - Only issues: sle.actual_qty < 0, voucher_type in (DN, SI)
+          - CC filter: Warehouse.<cc_field> = %(cc)s, with cc_field chosen
+            dynamically (cost_center or custom_cost__center).
         """
+        # Decide which Warehouse CC column exists
+        wh_cc_field = None
+        if frappe.db.has_column("Warehouse", "cost_center"):
+            wh_cc_field = "cost_center"
+        elif frappe.db.has_column("Warehouse", "custom_cost__center"):
+            wh_cc_field = "custom_cost__center"
+
         params = {
             "item_code": item_code,
-            "cc": cost_center,
-            "weeks": weeks_back,
         }
+        if cost_center and wh_cc_field:
+            params["cc"] = cost_center
+            cc_filter = f"AND w.`{wh_cc_field}` = %(cc)s"
+        else:
+            cc_filter = ""
 
-        si_sql = """
-            SELECT
-              DATE_SUB(DATE(si.posting_date), INTERVAL WEEKDAY(si.posting_date) DAY) AS week_start,
-              SUM(CASE WHEN sii.qty > 0 THEN sii.qty ELSE 0 END) AS week_qty
-            FROM `tabSales Invoice` si
-            JOIN `tabSales Invoice Item` sii ON sii.parent = si.name
-            WHERE si.docstatus = 1
-              AND sii.item_code = %(item_code)s
-              AND si.posting_date >= DATE_SUB(CURDATE(), INTERVAL %(weeks)s WEEK)
-              AND si.posting_date <  DATE_ADD(CURDATE(), INTERVAL 1 DAY)
-              AND COALESCE(si.cost_center, sii.cost_center) = %(cc)s
-            GROUP BY week_start
-        """
-
-        dn_sql = """
-            SELECT
-              DATE_SUB(DATE(dn.posting_date), INTERVAL WEEKDAY(dn.posting_date) DAY) AS week_start,
-              SUM(CASE WHEN dni.qty > 0 THEN dni.qty ELSE 0 END) AS week_qty
-            FROM `tabDelivery Note` dn
-            JOIN `tabDelivery Note Item` dni ON dni.parent = dn.name
-            WHERE dn.docstatus = 1
-              AND dni.item_code = %(item_code)s
-              AND dn.posting_date >= DATE_SUB(CURDATE(), INTERVAL %(weeks)s WEEK)
-              AND dn.posting_date <  DATE_ADD(CURDATE(), INTERVAL 1 DAY)
-              AND COALESCE(dn.cost_center, dni.cost_center) = %(cc)s
-            GROUP BY week_start
-        """
-
-        # Average & stdev across weekly buckets
         wrapper = f"""
             SELECT
-              AVG(week_qty)/7.0          AS add_per_day,
-              STDDEV(week_qty)/SQRT(7.0) AS sigma_daily
+              COUNT(*) AS weeks_sampled_365,
+              SUM(dw.issued_qty_week) / 365.0             AS add_per_day,
+              STDDEV_SAMP(dw.issued_qty_week) / SQRT(7.0) AS sigma_daily
             FROM (
-                {si_sql}
-                UNION ALL
-                {dn_sql}
-            ) q
+              SELECT
+                YEARWEEK(sle.posting_date, 3) AS week_start,
+                SUM(-sle.actual_qty) AS issued_qty_week
+              FROM `tabStock Ledger Entry` sle
+              JOIN `tabWarehouse` w ON w.name = sle.warehouse
+              WHERE sle.is_cancelled = 0
+                AND sle.voucher_type IN ('Delivery Note','Sales Invoice')
+                AND sle.actual_qty < 0
+                AND sle.item_code = %(item_code)s
+                {cc_filter}
+                AND sle.posting_date >= DATE_SUB(CURDATE(), INTERVAL 365 DAY)
+              GROUP BY YEARWEEK(sle.posting_date, 3)
+            ) dw
         """
         val = frappe.db.sql(wrapper, params)
-        if not val:
+        if not val or val[0] is None or val[0][0] is None:
             return (0.0, 0.0)
-        add_per_day = float(val[0][0] or 0.0)
-        sigma_daily = float(val[0][1] or 0.0)
+
+        weeks_sampled = float(val[0][0] or 0.0)
+        add_per_day = float(val[0][1] or 0.0)
+        sigma_daily = float(val[0][2] or 0.0)
+
+        if weeks_sampled <= 0:
+            frappe.logger().info(
+                {
+                    "msg": "Weekly demand: no SLE weeks (365d, Warehouse CC dynamic)",
+                    "item_code": item_code,
+                    "cost_center": cost_center,
+                    "warehouse_cc_field": wh_cc_field,
+                }
+            )
+
         return (add_per_day, sigma_daily)
 
     def _get_z_value(self, item_code: str, cost_center: str) -> float:
         """
-        Map Z for SS from classification, per sheet:
+        Z logic exactly as in the policy table / SQL:
 
-          - A1 (or A+ / A-Prime tier) → 2.32634787404084
-          - A2 / other A-class         → 2.05374891063182
-          - Everything else (B/C/…)    → 1.95996398454005
+            CASE
+              WHEN abc_fine   = 'A1' THEN 2.32634787404084
+              WHEN abc_coarse = 'A'  THEN 2.05374891063182
+              ELSE 1.95996398454005
+            END
+
+        We try to read:
+          - abc_fine   from self.abc_fine or self.item_classification
+          - abc_coarse from self.abc_coarse, or derive from abc_fine
+        If both are missing, we FALL BACK to the Bucket Branch classification
+        logic (Item Classification / Bucket Branch Detail).
         """
 
-        # 1) Try local cached classification / abc_fine first
+        # -------- 1) Pull fine & coarse ABC from DocType fields (preferred) --------
         abc_fine = (
             (getattr(self, "abc_fine", None)
-             or getattr(self, "item_classification", "")
+             or getattr(self, "item_classification", None)
+             or getattr(self, "_tier_value", None)
+             or getattr(self, "_class_value", None)
              or "")
-            .strip()
-            .upper()
-        )
+        ).strip().upper()
+
+        abc_coarse = (getattr(self, "abc_coarse", None) or "").strip().upper()
+
+        # Derive coarse ABC from fine if not explicitly stored
+        if not abc_coarse and abc_fine:
+            if abc_fine in {"A1", "A2", "A"} or abc_fine.startswith("A"):
+                abc_coarse = "A"
+            elif abc_fine.startswith("B"):
+                abc_coarse = "B"
+            else:
+                abc_coarse = "C"
+
+        # If we have either fine or coarse, apply the policy-table CASE directly
+        if abc_fine or abc_coarse:
+            if abc_fine == "A1":
+                return 2.32634787404084
+            if abc_coarse == "A":
+                return 2.05374891063182
+            return 1.95996398454005
+
+        # -------- 2) Fallback: use Bucket Branch Detail classification (old logic) --------
         tier = getattr(self, "_tier_value", None)
         cls = getattr(self, "_class_value", None)
-        tier = tier.strip().upper() if tier else ""
-        cls = cls.strip().upper() if cls else ""
+        if tier:
+            tier = tier.strip().upper()
+        if cls:
+            cls = cls.strip().upper()
 
-        # A1 tier or fine classification
-        if abc_fine == "A1" or tier in {"A1", "A+", "A-PRIME"}:
+        # Map tier/class to the same three Z levels
+        if tier in {"A1", "A+", "A-PRIME"}:
             return 2.32634787404084
-
-        # A2 / other A-class
-        if abc_fine == "A2" or cls == "A" or (tier and tier.startswith("A")):
+        if cls == "A" or (tier and tier.startswith("A")):
             return 2.05374891063182
 
-        # If we still don't know, try the DB rule from Bucket Branch Detail
+        # As a last resort, query Item Classification / Bucket Branch Detail
         params = {"item_code": item_code, "cc": cost_center}
         sql = """
             SELECT
               CASE
                 WHEN bbd.`_tier` IN ('A1','A+','A-Prime') THEN 2.32634787404084
-                WHEN bbd.`_tier` = 'A2'
-                     OR bbd.`_class` = 'A'
-                     OR bbd.`_tier` LIKE 'A%%'
-                     THEN 2.05374891063182
+                WHEN (bbd.`_class` = 'A' OR bbd.`_tier` LIKE 'A%%') THEN 2.05374891063182
                 ELSE 1.95996398454005
               END AS z_value
             FROM `tabItem Classification` ic
@@ -806,7 +797,7 @@ class ItemPlanningPolicy(Document):
         if val and val[0] and val[0][0] is not None:
             return float(val[0][0])
 
-        # Default (B/C/others)
+        # Default (B/C level)
         return 1.95996398454005
 
     # ---------- 5) MINIMUM INVENTORY QTY ----------
