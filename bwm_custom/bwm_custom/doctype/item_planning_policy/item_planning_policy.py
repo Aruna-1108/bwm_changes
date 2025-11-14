@@ -30,6 +30,10 @@ class ItemPlanningPolicy(Document):
           8) XYZ Classification (T12 variability)
           9) FSN logic (F/S/N from active months in T12)
          10) Policy recommendation (MTS / MTS-Lite / MTO) → Coverage Days
+             - MTS        : 60 days
+             - MTS-Lite A : 20 days
+             - MTS-Lite B1: 15 days
+             - MTO        : 0 days
         """
         # Demand base (last-3-months, purely informational)
         last3 = self.compute_last3_sales_qty()
@@ -94,10 +98,16 @@ class ItemPlanningPolicy(Document):
         Reads fine classification directly from Bucket Branch Detail._class:
           A1, A2, B1, B2, C ...
         and writes it into self.item_classification.
+        Also caches:
+          - self._tier_value
+          - self._class_value
+        for later Z-value selection.
         """
         item_code = (getattr(self, "item", None) or "").strip()
         cost_center = self._get_effective_cost_center()
         if not item_code or not cost_center:
+            self._tier_value = ""
+            self._class_value = ""
             return ""
         row = self._fetch_item_classification_row(item_code, cost_center)
         if not row:
@@ -158,6 +168,7 @@ class ItemPlanningPolicy(Document):
             units_365d = sum(monthly_vals)
             cv = (sd_m / avg_m) if avg_m > 0 else None
 
+            # thresholds exactly from sheet: X < 0.75; Y <= 1.25; else Z
             if avg_m == 0 or cv is None:
                 xyz = "Z"
             elif cv <= 0.75:
@@ -212,6 +223,7 @@ class ItemPlanningPolicy(Document):
         from_date = add_months(getdate(today()), -12)
         to_date = getdate(today())
 
+        # Distinct customers in T12
         sql_cust = """
             SELECT COUNT(DISTINCT si.customer)
             FROM `tabSales Invoice Item` sii
@@ -222,8 +234,11 @@ class ItemPlanningPolicy(Document):
               AND si.posting_date BETWEEN %s AND %s
               AND si.customer IS NOT NULL AND si.customer <> ''
         """
-        customers_t12 = int(frappe.db.sql(sql_cust, (item_code, cost_center, from_date, to_date))[0][0] or 0)
+        customers_t12 = int(
+            frappe.db.sql(sql_cust, (item_code, cost_center, from_date, to_date))[0][0] or 0
+        )
 
+        # Distinct invoices in T12
         sql_inv = """
             SELECT COUNT(DISTINCT si.name)
             FROM `tabSales Invoice Item` sii
@@ -233,8 +248,11 @@ class ItemPlanningPolicy(Document):
               AND COALESCE(si.cost_center, sii.cost_center) = %s
               AND si.posting_date BETWEEN %s AND %s
         """
-        invoices_t12 = int(frappe.db.sql(sql_inv, (item_code, cost_center, from_date, to_date))[0][0] or 0)
+        invoices_t12 = int(
+            frappe.db.sql(sql_inv, (item_code, cost_center, from_date, to_date))[0][0] or 0
+        )
 
+        # Active months in T12
         sql_months = """
             SELECT COUNT(*) FROM (
               SELECT DATE_FORMAT(si.posting_date, '%%Y-%%m') AS ym, SUM(sii.qty) AS m_qty
@@ -251,6 +269,7 @@ class ItemPlanningPolicy(Document):
         res = frappe.db.sql(sql_months, (item_code, cost_center, from_date, to_date))
         active_months_12 = int((res[0][0] if res else 0) or 0)
 
+        # FSN class based on active months in T12
         if active_months_12 >= 9:
             fsn_logic = "F"
         elif 4 <= active_months_12 <= 8:
@@ -274,8 +293,14 @@ class ItemPlanningPolicy(Document):
     # -------------------- Policy Recommendation (MTS / MTS-Lite / MTO) --------------------
     def compute_policy_recommendation(self) -> str:
         """
-        Exactly aligned with SQL policy_pick.
+        Approximate Python mirror of SQL policy_pick:
+
+          - A1/A2, xyz='X', FSN in (F,S), customers>=2, top_cust_share<=0.65 → MTS
+          - A1/A2, xyz IN ('X','Y'), FSN in (F,S), customers>=2 → MTS-Lite (main)
+          - A1 strategic override (cv<=1.75, customers>=5, active_months>=6) → MTS-Lite
+          - B1 breadth handled in coverage_days (15 days) via classification.
         """
+        # abc_fine: try dedicated field; fallback to item_classification
         abc_fine = (
             (getattr(self, "abc_fine", None)
              or getattr(self, "item_classification", "")
@@ -286,6 +311,7 @@ class ItemPlanningPolicy(Document):
         xyz = (getattr(self, "xyz_classifications", "") or "").strip().upper()
         fsn = (getattr(self, "fsn_logic", "") or "").strip().upper()
 
+        # Prefer UI field customer_count; fallback to customers_t12
         raw_customers = getattr(self, "customer_count", None) if hasattr(self, "customer_count") else None
         if raw_customers is None:
             raw_customers = getattr(self, "customers_t12", 0)
@@ -293,6 +319,7 @@ class ItemPlanningPolicy(Document):
 
         active_m = int(getattr(self, "active_months_12", 0) or 0)
 
+        # Prefer UI field cv; fallback to cv_t12
         raw_cv = getattr(self, "cv", None) if hasattr(self, "cv") else None
         if raw_cv is None:
             raw_cv = getattr(self, "cv_t12", None)
@@ -304,9 +331,11 @@ class ItemPlanningPolicy(Document):
         is_A12 = abc_fine in {"A1", "A2"}
         fsn_good = fsn in {"F", "S"}
 
+        # MTS gate (from sheet)
         if is_A12 and xyz == "X" and fsn_good and customers >= 2:
             rec = "MTS"
         else:
+            # MTS-Lite gates (main + strategic override for A1)
             cond_main = (is_A12 and (xyz in {"X", "Y"}) and fsn_good and customers >= 2)
             cond_override = (
                 abc_fine == "A1"
@@ -323,16 +352,30 @@ class ItemPlanningPolicy(Document):
     # ---------------- Coverage Days from Policy ----------------
     def apply_coverage_from_policy(self) -> int:
         """
-        Map policy_recommendation → coverage_days.
-          - MTS       : 40
-          - MTS-Lite  : 20
-          - else (MTO): 0
+        Map policy_recommendation + fine ABC to coverage_days.
+
+          - MTS                 : 60
+          - MTS-Lite (A1/A2/others) : 20
+          - MTS-Lite for B1     : 15
+          - else (MTO)          : 0
         """
         rec = (getattr(self, "policy_recommendation", "") or "").strip().upper()
+        abc_fine = (
+            (getattr(self, "abc_fine", None)
+             or getattr(self, "item_classification", "")
+             or "")
+            .strip()
+            .upper()
+        )
+
         if rec == "MTS":
-            days = 40
+            days = 60
         elif rec in {"MTS - LITE", "MTS LITE", "MTSLITE"}:
-            days = 20
+            # Special narrower coverage for B1 breadth items
+            if abc_fine == "B1":
+                days = 15
+            else:
+                days = 20
         else:
             days = 0
 
@@ -401,6 +444,7 @@ class ItemPlanningPolicy(Document):
             - local   : w.custom_cost__center
             - prod    : w.cost_center
         """
+
         def percentile_nearest_rank(sorted_vec, q: float) -> float:
             n = len(sorted_vec)
             if n == 0:
@@ -429,9 +473,7 @@ class ItemPlanningPolicy(Document):
         elif frappe.db.has_column("Warehouse", "cost_center"):
             wh_cc_field = "cost_center"
 
-        params = {
-            "item_code": item_code,
-        }
+        params = {"item_code": item_code}
         if cost_center:
             params["cost_center"] = cost_center
 
@@ -463,17 +505,20 @@ class ItemPlanningPolicy(Document):
 
         if not vec:
             _reset_targets()
-            frappe.logger().info({
-                "msg": "P50/P80 lead days: no observations (730d, Warehouse CC dynamic)",
-                "item_code": item_code,
-                "cost_center": cost_center,
-                "warehouse_cc_field": wh_cc_field,
-            })
+            frappe.logger().info(
+                {
+                    "msg": "P50/P80 lead days: no observations (730d, Warehouse CC dynamic)",
+                    "item_code": item_code,
+                    "cost_center": cost_center,
+                    "warehouse_cc_field": wh_cc_field,
+                }
+            )
             return 0.0
 
         n = len(vec)
         mid = n // 2
 
+        # median (p50)
         if n % 2:
             median_val = vec[mid]
         else:
@@ -506,18 +551,24 @@ class ItemPlanningPolicy(Document):
         END
         """
         ic = (getattr(self, "item_classification", "") or "").strip().upper()
+        abc_fine = (getattr(self, "abc_fine", "") or "").strip().upper()
+        if abc_fine:
+            ic = abc_fine  # prefer explicit fine ABC from UI
 
+        # p50 / p80 / avg as stored by compute_p50_lead_days()
         p50 = float(getattr(self, "p50", getattr(self, "p50_lead_days", 0)) or 0)
         p80 = float(getattr(self, "p80", 0) or 0)
         avg = float(getattr(self, "lead_time_average", 0) or 0)
 
         if ic in {"A1", "A2"}:
+            # A1/A2 → COALESCE(P80, AVG, 45)
             if p80 > 0:
                 return p80, "P80"
             if avg > 0:
                 return avg, "AVG"
             return 45.0, "FALLBACK_45"
         else:
+            # others → COALESCE(P50, AVG, 45)
             if p50 > 0:
                 return p50, "P50"
             if avg > 0:
@@ -551,14 +602,32 @@ class ItemPlanningPolicy(Document):
         """
         B2 rule (ignore lead-time variability):
 
-          SafetyDays = ( Z * sigma_daily_eff * sqrt(L) ) / ADD_eff
+          Demand granularity from sheet:
+            - xyz = 'X'   → monthly demand
+            - xyz IN('Y','Z') → weekly demand
 
-        L is lt_used_days / lead_days as selected above.
+          Effective demand stats (ADD_eff, sigma_daily_eff):
+
+            For X (monthly):
+              ADD_eff          = units_365d / 365
+              sigma_daily_eff  = SD(monthly_qty) / sqrt(365/12)
+
+            For Y/Z (weekly):
+              ADD_eff, sigma_daily_eff from _get_demand_stats()
+              (weekly issues of Sales Invoice + Delivery Note).
+
+          Safety stock (units) from sheet:
+            safety_stock_units = Z * sqrt( L * sigma_daily_eff^2 )
+                               = Z * sigma_daily_eff * sqrt(L)
+
+          Safety days:
+            safety_days = safety_stock_units / ADD_eff
         """
         item_code = (getattr(self, "item", None) or "").strip()
         company = (getattr(self, "company", None) or "").strip()
         cost_center = self._get_effective_cost_center()
 
+        # reset effective stats
         self._effective_add_per_day = 0.0
         self._effective_sigma_daily = 0.0
         self._demand_source = None
@@ -569,19 +638,23 @@ class ItemPlanningPolicy(Document):
 
         xyz = (getattr(self, "xyz_classifications", "") or "").strip().upper()
 
+        # ---- 1) Determine effective ADD and sigma_daily exactly like the SQL ----
         add_per_day_eff = 0.0
         sigma_daily_eff = 0.0
 
         if xyz == "X":
+            # MONTHLY-based demand
             avg_m = float(getattr(self, "avg_m_qty", 0) or 0)
             sd_m = float(getattr(self, "sd_m_qty", 0) or 0)
             units_365d = float(getattr(self, "units_365d", 0) or 0)
             if units_365d > 0 and avg_m > 0:
                 add_per_day_eff = units_365d / 365.0
+                # σ_daily_monthly = STDDEV_SAMP(m_qty) / sqrt(365/12)
                 sigma_daily_eff = sd_m / math.sqrt(365.0 / 12.0)
             self._demand_source = "MONTHLY"
         else:
-            weeks_back = int(getattr(self, "weeks_back", 52) or 52)
+            # WEEKLY-based demand (xyz in Y/Z)
+            weeks_back = int(getattr(self, "weeks_back", 52) or 52)  # ≈ 1 year
             add_per_day_eff, sigma_daily_eff = self._get_demand_stats(
                 item_code=item_code,
                 cost_center=cost_center,
@@ -592,6 +665,7 @@ class ItemPlanningPolicy(Document):
         self._effective_add_per_day = add_per_day_eff
         self._effective_sigma_daily = sigma_daily_eff
 
+        # ---- 2) Lead days L with same fallback chain as SQL lt_used_days ----
         try:
             L = float(getattr(self, "lead_days", 0) or 0)
         except Exception:
@@ -605,8 +679,13 @@ class ItemPlanningPolicy(Document):
             self.safety_days = 0.0
             return self.safety_days
 
+        # σ during L (B2: demand variance only): σ_DL = sigma_daily_eff * sqrt(L)
         sigma_during_lt_units = sigma_daily_eff * math.sqrt(L)
+
+        # safety stock (units) = Z * σ_DL  = Z * sqrt(L * sigma_daily_eff^2)
         safety_stock_units = Z * sigma_during_lt_units
+
+        # Safety days = safety_stock_units / ADD_eff
         safety_days = safety_stock_units / add_per_day_eff
 
         self.safety_days = round(max(0.0, safety_days), 2)
@@ -657,6 +736,7 @@ class ItemPlanningPolicy(Document):
             GROUP BY week_start
         """
 
+        # Average & stdev across weekly buckets
         wrapper = f"""
             SELECT
               AVG(week_qty)/7.0          AS add_per_day,
@@ -675,24 +755,45 @@ class ItemPlanningPolicy(Document):
         return (add_per_day, sigma_daily)
 
     def _get_z_value(self, item_code: str, cost_center: str) -> float:
-        """Map Z from cached _tier/_class; fallback to SQL CASE; default 1.95996."""
+        """
+        Map Z for SS from classification, per sheet:
+
+          - A1 (or A+ / A-Prime tier) → 2.32634787404084
+          - A2 / other A-class         → 2.05374891063182
+          - Everything else (B/C/…)    → 1.95996398454005
+        """
+
+        # 1) Try local cached classification / abc_fine first
+        abc_fine = (
+            (getattr(self, "abc_fine", None)
+             or getattr(self, "item_classification", "")
+             or "")
+            .strip()
+            .upper()
+        )
         tier = getattr(self, "_tier_value", None)
         cls = getattr(self, "_class_value", None)
-        if tier:
-            tier = tier.strip().upper()
-        if cls:
-            cls = cls.strip().upper()
-        if tier in {"A1", "A+", "A-PRIME"}:
+        tier = tier.strip().upper() if tier else ""
+        cls = cls.strip().upper() if cls else ""
+
+        # A1 tier or fine classification
+        if abc_fine == "A1" or tier in {"A1", "A+", "A-PRIME"}:
             return 2.32634787404084
-        if cls == "A" or (tier and tier.startswith("A")):
+
+        # A2 / other A-class
+        if abc_fine == "A2" or cls == "A" or (tier and tier.startswith("A")):
             return 2.05374891063182
 
+        # If we still don't know, try the DB rule from Bucket Branch Detail
         params = {"item_code": item_code, "cc": cost_center}
         sql = """
             SELECT
               CASE
                 WHEN bbd.`_tier` IN ('A1','A+','A-Prime') THEN 2.32634787404084
-                WHEN bbd.`_class` = 'A' OR bbd.`_tier` LIKE 'A%%' THEN 2.05374891063182
+                WHEN bbd.`_tier` = 'A2'
+                     OR bbd.`_class` = 'A'
+                     OR bbd.`_tier` LIKE 'A%%'
+                     THEN 2.05374891063182
                 ELSE 1.95996398454005
               END AS z_value
             FROM `tabItem Classification` ic
@@ -704,6 +805,8 @@ class ItemPlanningPolicy(Document):
         val = frappe.db.sql(sql, params)
         if val and val[0] and val[0][0] is not None:
             return float(val[0][0])
+
+        # Default (B/C/others)
         return 1.95996398454005
 
     # ---------- 5) MINIMUM INVENTORY QTY ----------
@@ -792,9 +895,9 @@ def apply_item_reorder_from_policy(policy_name: str):
         missing.append("Request for Warehouse")
     if not (policy.material_request_type or "").strip():
         missing.append("Material Request Type")
-    if (getattr(policy, "final_rol", None) in (None, "")):
+    if getattr(policy, "final_rol", None) in (None, ""):
         missing.append("Final ROL (final_rol)")
-    if (getattr(policy, "final_roq", None) in (None, "")):
+    if getattr(policy, "final_roq", None) in (None, ""):
         missing.append("Final ROQ (final_roq)")
     if missing:
         frappe.throw("Please enter: <b>{}</b>".format(", ".join(missing)))
@@ -829,7 +932,8 @@ def apply_item_reorder_from_policy(policy_name: str):
 
     # 1) strict match by (warehouse, MR type)
     matches = [
-        r for r in rows
+        r
+        for r in rows
         if norm(getattr(r, "warehouse", None)) == wh_n
         and norm(getattr(r, "material_request_type", "Purchase")) == mr_n
     ]
@@ -853,8 +957,8 @@ def apply_item_reorder_from_policy(policy_name: str):
 
         rol_changed = changed(getattr(keep, "warehouse_reorder_level", 0), rol)
         roq_changed = changed(getattr(keep, "warehouse_reorder_qty", 0), roq)
-        mr_changed = (norm(getattr(keep, "material_request_type", "")) != mr_n)
-        grp_changed = (norm(getattr(keep, "warehouse_group", None)) != norm(wh_group))
+        mr_changed = norm(getattr(keep, "material_request_type", "")) != mr_n
+        grp_changed = norm(getattr(keep, "warehouse_group", None)) != norm(wh_group)
 
         if rol_changed or roq_changed or mr_changed or grp_changed:
             keep.warehouse_reorder_level = rol
