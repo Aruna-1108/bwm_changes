@@ -10,21 +10,21 @@
   "column_break_oiet",
   "company",
   "section_break_w6gl",
+  "minimum_inventory_qty",
   "safety_days",
+  "coverage_days",
   "window__days",
   "lead_days",
   "lead_time_average",
   "p50",
   "p80",
-  "minimum_inventory_qty",
+  "policy_recommendation",
+  "item_classification",
+  "xyz_classifications",
   "column_break_fhae",
   "active",
-  "coverage_days",
-  "item_classification",
   "customer_count",
   "cv",
-  "policy_recommendation",
-  "xyz_classifications",
   "fsn_logic",
   "rol",
   "roq",
@@ -147,7 +147,7 @@
   {
    "fieldname": "minimum_inventory_qty",
    "fieldtype": "Float",
-   "label": "Minimum Inventory Qty",
+   "label": "Safety Stock",
    "read_only": 1
   },
   {
@@ -179,6 +179,7 @@
   {
    "fieldname": "lead_time_average",
    "fieldtype": "Float",
+   "hidden": 1,
    "label": "Lead Time Average",
    "read_only": 1
   },
@@ -231,14 +232,14 @@
   {
    "fieldname": "cv",
    "fieldtype": "Data",
-   "label": "cv",
+   "label": "Standard Deviation",
    "read_only": 1
   }
  ],
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2025-11-13 17:22:24.573473",
+ "modified": "2025-11-14 12:24:49.675144",
  "modified_by": "Administrator",
  "module": "Bwm Custom",
  "name": "Item Planning Policy",
