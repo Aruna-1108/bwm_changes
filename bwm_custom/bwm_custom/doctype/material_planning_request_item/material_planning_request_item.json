@@ -1,0 +1,153 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "creation": "2025-11-14 15:08:28.983914",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "item",
+  "item_name",
+  "uom",
+  "item_classification",
+  "xyz_classification",
+  "fsn",
+  "customer_count",
+  "p80",
+  "p50",
+  "lt_used_days",
+  "add_per_day",
+  "sigma_daily",
+  "safety_stock_unit",
+  "safety_day",
+  "recommended_rol",
+  "coverage_days",
+  "avg_monthly_qty",
+  "sd",
+  "total_units",
+  "cv"
+ ],
+ "fields": [
+  {
+   "fieldname": "item",
+   "fieldtype": "Link",
+   "label": "Item",
+   "options": "Item"
+  },
+  {
+   "fetch_from": "item.item_name",
+   "fieldname": "item_name",
+   "fieldtype": "Data",
+   "label": "Item Name"
+  },
+  {
+   "fetch_from": "item.stock_uom",
+   "fieldname": "uom",
+   "fieldtype": "Link",
+   "label": "UOM",
+   "options": "UOM"
+  },
+  {
+   "fieldname": "item_classification",
+   "fieldtype": "Select",
+   "label": "Item Classification",
+   "options": "\nA1\nA2\nB1\nB2\nC"
+  },
+  {
+   "fieldname": "xyz_classification",
+   "fieldtype": "Select",
+   "label": "XYZ Classification",
+   "options": "\nX\nY\nZ"
+  },
+  {
+   "fieldname": "fsn",
+   "fieldtype": "Select",
+   "label": "FSN ",
+   "options": "\nF\nS\nN"
+  },
+  {
+   "fieldname": "p80",
+   "fieldtype": "Float",
+   "label": "P80"
+  },
+  {
+   "fieldname": "p50",
+   "fieldtype": "Float",
+   "label": "P50"
+  },
+  {
+   "fieldname": "lt_used_days",
+   "fieldtype": "Float",
+   "label": "LT Used Days"
+  },
+  {
+   "fieldname": "add_per_day",
+   "fieldtype": "Float",
+   "label": "Add Per Day"
+  },
+  {
+   "fieldname": "sigma_daily",
+   "fieldtype": "Float",
+   "label": "Sigma Daily"
+  },
+  {
+   "fieldname": "safety_stock_unit",
+   "fieldtype": "Float",
+   "label": "Safety stock Unit"
+  },
+  {
+   "fieldname": "safety_day",
+   "fieldtype": "Float",
+   "label": "Safety Day"
+  },
+  {
+   "fieldname": "recommended_rol",
+   "fieldtype": "Float",
+   "label": "Recommended ROL"
+  },
+  {
+   "fieldname": "coverage_days",
+   "fieldtype": "Float",
+   "label": "Coverage Days"
+  },
+  {
+   "fieldname": "avg_monthly_qty",
+   "fieldtype": "Float",
+   "label": "Avg monthly qty"
+  },
+  {
+   "fieldname": "sd",
+   "fieldtype": "Float",
+   "label": "SD"
+  },
+  {
+   "fieldname": "total_units",
+   "fieldtype": "Float",
+   "label": "Total Units"
+  },
+  {
+   "fieldname": "cv",
+   "fieldtype": "Float",
+   "label": "CV"
+  },
+  {
+   "fieldname": "customer_count",
+   "fieldtype": "Float",
+   "label": "Customer Count"
+  }
+ ],
+ "grid_page_length": 50,
+ "index_web_pages_for_search": 1,
+ "istable": 1,
+ "links": [],
+ "modified": "2025-11-17 10:30:48.792645",
+ "modified_by": "Administrator",
+ "module": "Bwm Custom",
+ "name": "Material Planning Request Item",
+ "owner": "Administrator",
+ "permissions": [],
+ "row_format": "Dynamic",
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

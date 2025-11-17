@@ -16,7 +16,7 @@ def get_permission_query_conditions(user: str | None = None, doctype: str | None
     user_sql = frappe.db.escape(user)
 
     # HR roles: unrestricted
-    if {"HR Manager", "System Manager", "HR User"} & roles:
+    if {"HR Manager", "System Manager", "HR User","Accounts User","Accounts Manager"} & roles:
         return ""
 
     # For ESS + ESS Approver → show if either applicant or approver matches login email
@@ -34,7 +34,7 @@ def has_permission(doc, ptype, user) -> bool:
     """
     roles = set(frappe.get_roles(user))
 
-    if {"HR Manager", "System Manager", "HR User"} & roles:
+    if {"HR Manager", "System Manager", "HR User","Accounts User","Accounts Manager"} & roles:
         return True
 
     applicant_email = getattr(doc, APPLICANT_EMAIL_FIELD, None)

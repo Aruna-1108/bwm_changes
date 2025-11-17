@@ -15,8 +15,9 @@ class ItemPlanningPolicy(Document):
     def validate(self):
         """
         Auto-calc on Save (no blocking validation here):
-          1) Last-3-Months Sales Qty
-          2) Monthly & Daily Requirements  (INFORMATION ONLY; NOT used for ROL/ROQ)
+          1) Last-12-Months Sales Qty (T12)
+          2) Monthly & Daily Requirements (T12/12, T12/365; INFORMATION ONLY;
+             ROL/ROQ still use T12-based ADD from safety_days logic)
           3) Lead Days (= lt_used_days from SQL logic):
                - A1/A2 -> COALESCE(P80, AVG, 45)
                - Others -> COALESCE(P50, AVG, 45)
@@ -31,9 +32,9 @@ class ItemPlanningPolicy(Document):
           9) FSN logic (F/S/N from active months in T12)
          10) Policy recommendation (MTS / MTS-Lite / MTO) → Coverage Days
         """
-        # Demand base (last-3-months, purely informational)
-        last3 = self.compute_last3_sales_qty()
-        daily_last3 = self.compute_requirements(last3)  # returns daily for display only
+        # Demand base (last-12-months, purely informational)
+        t12_qty = self.compute_last3_sales_qty()        # now T12 window
+        daily_t12 = self.compute_requirements(t12_qty)  # returns daily for display only
 
         # Lead-time stats & item class cache
         self.compute_p50_lead_days()              # fills p50, p80, lead_time_average
@@ -46,13 +47,13 @@ class ItemPlanningPolicy(Document):
         # Downstream calcs using lead-days + demand stats (T12 / weekly)
         self.select_lead_days()                   # sets lead_days = lt_used_days
         self.compute_safety_days()                # sets safety_days AND _effective_add_per_day
-        self.compute_minimum_inventory_qty(daily_last3)
-        self.compute_rol(daily_last3)
+        self.compute_minimum_inventory_qty(daily_t12)
+        self.compute_rol(daily_t12)
 
         # Policy → Coverage → ROQ
         self.compute_policy_recommendation()
         self.apply_coverage_from_policy()
-        self.compute_roq(daily_last3)
+        self.compute_roq(daily_t12)
 
     # -------------------- Helper: effective cost center field --------------------
     def _get_effective_cost_center(self) -> str:
@@ -356,18 +357,26 @@ class ItemPlanningPolicy(Document):
             self.coverage_days = days
         return days
 
-    # ---------- 1) SALES (last 3 months) ----------
+    # ---------- 1) SALES (now last 12 months / T12) ----------
     def compute_last3_sales_qty(self) -> float:
-        """Sum Sales Invoice Item.qty for last 3 months (submitted SIs only)."""
+        """
+        Sum Sales Invoice Item.qty for last 12 months (T12, submitted SIs only).
+
+        NOTE: Kept function name for backward compatibility, but logic
+        is now 12-month window to support T12/365 daily requirement.
+        """
         item_code: Optional[str] = getattr(self, "item", None)
         if not item_code:
-            self.last_3_month_sales_qty = 0.0
+            if hasattr(self, "last_3_month_sales_qty"):
+                self.last_3_month_sales_qty = 0.0
+            if hasattr(self, "last_12_month_sales_qty"):
+                self.last_12_month_sales_qty = 0.0
             return 0.0
 
         company: Optional[str] = getattr(self, "company", None)
         cost_center: Optional[str] = self._get_effective_cost_center()
 
-        from_date = add_months(getdate(today()), -3)
+        from_date = add_months(getdate(today()), -12)
         to_date = getdate(today())
 
         sql = """
@@ -389,21 +398,40 @@ class ItemPlanningPolicy(Document):
             params.append(cost_center)
 
         qty = frappe.db.sql(sql, params)
-        last3 = float(qty[0][0]) if qty else 0.0
-        self.last_3_month_sales_qty = round(last3, ROUND_PLACES)
-        return last3
+        t12 = float(qty[0][0]) if qty else 0.0
 
-    # ---------- 2) REQUIREMENTS (monthly / daily) ----------
-    def compute_requirements(self, last3: float) -> float:
+        # Backward-compatible: still write into last_3_month_sales_qty,
+        # but value is T12; if you have a dedicated last_12_month_sales_qty
+        # field, it will also be populated.
+        if hasattr(self, "last_3_month_sales_qty"):
+            self.last_3_month_sales_qty = round(t12, ROUND_PLACES)
+        if hasattr(self, "last_12_month_sales_qty"):
+            self.last_12_month_sales_qty = round(t12, ROUND_PLACES)
+
+        return t12
+
+    # ---------- 2) REQUIREMENTS (monthly / daily from T12) ----------
+    def compute_requirements(self, t12: float) -> float:
         """
-        Monthly = last3 / 3 ; Daily = monthly / 30.
-        NOTE: This is informational. ROL/ROQ use the T12-based ADD from
-              compute_safety_days(), stored in _effective_add_per_day.
+        Monthly = T12 / 12 ; Daily = T12 / 365.
+
+        This aligns with your SQL-style ADD from T12:
+          - over 12 months → average monthly
+          - over 365 days → average daily
+
+        NOTE: This is informational for the UI. ROL/ROQ still use the
+              T12-based ADD from compute_safety_days(), stored in
+              _effective_add_per_day, which matches add_per_day_eff.
         """
-        monthly = (last3 or 0.0) / 3.0
-        daily = monthly / 30.0
-        self.monthly_requirement = round(monthly, ROUND_PLACES)
-        self.daily_requirement = round(daily, ROUND_PLACES)
+        t12 = t12 or 0.0
+        monthly = t12 / 12.0
+        daily = t12 / 365.0
+
+        if hasattr(self, "monthly_requirement"):
+            self.monthly_requirement = round(monthly, ROUND_PLACES)
+        if hasattr(self, "daily_requirement"):
+            self.daily_requirement = round(daily, ROUND_PLACES)
+
         return daily
 
     # ---------- 3.1 P-50, P-80, Average lead day (MATCHES leadtime_samples CTE) ----------
@@ -817,7 +845,7 @@ class ItemPlanningPolicy(Document):
         Minimum Inventory Qty = Safety Days × Daily Requirement.
 
         If _effective_add_per_day > 0, use that (matches SQL add_per_day).
-        Else fallback to last-3-month daily.
+        Else fallback to T12/365 daily (or daily_requirement field).
         """
         safety_days = float(getattr(self, "safety_days", 0) or 0)
         eff_add = float(getattr(self, "_effective_add_per_day", 0) or 0)
@@ -841,7 +869,7 @@ class ItemPlanningPolicy(Document):
           safety_stock_units = safety_days * add_per_day_eff
 
         If effective ADD is not available, fallback:
-          ROL = (Safety Days + Lead Days) × Daily Requirement (last-3-month).
+          ROL = (Safety Days + Lead Days) × Daily Requirement (T12/365).
         """
         L, _ = self._selected_lead_days_and_basis()
         safety_days = float(getattr(self, "safety_days", 0) or 0)
@@ -863,7 +891,7 @@ class ItemPlanningPolicy(Document):
 
             ROQ = coverage_days * add_per_day_eff
 
-        Use effective ADD when available; otherwise fallback to last-3-month daily.
+        Use effective ADD when available; otherwise fallback to T12/365 daily.
         """
         coverage_days = float(getattr(self, "coverage_days", 0) or 0)
         eff_add = float(getattr(self, "_effective_add_per_day", 0) or 0)
