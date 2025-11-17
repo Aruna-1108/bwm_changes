@@ -1,0 +1,81 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "creation": "2025-11-14 14:56:24.578447",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "cost_center",
+  "posting_date",
+  "column_break_mwko",
+  "company",
+  "section_break_4ezs",
+  "create_wo",
+  "material_planning_request_item"
+ ],
+ "fields": [
+  {
+   "fieldname": "cost_center",
+   "fieldtype": "Link",
+   "label": "Cost Center",
+   "options": "Cost Center"
+  },
+  {
+   "default": "Today",
+   "fieldname": "posting_date",
+   "fieldtype": "Date",
+   "label": "Posting Date"
+  },
+  {
+   "fieldname": "company",
+   "fieldtype": "Link",
+   "label": "Company",
+   "options": "Company",
+   "remember_last_selected_value": 1
+  },
+  {
+   "fieldname": "column_break_mwko",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "section_break_4ezs",
+   "fieldtype": "Section Break"
+  },
+  {
+   "fieldname": "material_planning_request_item",
+   "fieldtype": "Table",
+   "label": "Material Planning Request Item",
+   "options": "Material Planning Request Item"
+  },
+  {
+   "fieldname": "create_wo",
+   "fieldtype": "Button",
+   "label": "Create WO"
+  }
+ ],
+ "grid_page_length": 50,
+ "index_web_pages_for_search": 1,
+ "issingle": 1,
+ "links": [],
+ "modified": "2025-11-14 16:07:35.854239",
+ "modified_by": "Administrator",
+ "module": "Bwm Custom",
+ "name": "Material Planning Request",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "print": 1,
+   "read": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "row_format": "Dynamic",
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

@@ -241,23 +241,26 @@
   {
    "fieldname": "avg_m_qty",
    "fieldtype": "Float",
-   "label": "Avg m Qty"
+   "label": "Avg m Qty",
+   "read_only": 1
   },
   {
    "fieldname": "sd_m_qty",
    "fieldtype": "Float",
-   "label": "SD M Qty"
+   "label": "SD M Qty",
+   "read_only": 1
   },
   {
    "fieldname": "units_365d",
    "fieldtype": "Float",
-   "label": "Unit 365"
+   "label": "Unit 365",
+   "read_only": 1
   }
  ],
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2025-11-14 15:28:03.010589",
+ "modified": "2025-11-14 15:49:09.035186",
  "modified_by": "Administrator",
  "module": "Bwm Custom",
  "name": "Item Planning Policy",
