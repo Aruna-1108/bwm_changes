@@ -31,7 +31,9 @@ class MaterialPlanningRequest(Document):
               * demand stats
               * lead time (P50/P80/lt_used_days)
               * safety stock, safety days
-              * recommended ROL & coverage_days
+              * recommended ROL, coverage_days, ROQ
+              * stock snapshot + coverage from stock
+              * projected_minus_rol (projected vs target ROL)
           - If no cost center or no item → clear those fields.
         """
         self._recompute_child_rows()
@@ -56,7 +58,7 @@ class MaterialPlanningRequest(Document):
                 self._clear_child_row(row)
                 continue
 
-            # Use same backend function as JS
+            # Use backend function
             data = get_item_classification_for_mpr(item=item_code, cost_center=cc)
             if not data:
                 self._clear_child_row(row)
@@ -101,14 +103,33 @@ class MaterialPlanningRequest(Document):
             if hasattr(row, "safety_day"):
                 row.safety_day = data.get("safety_day") or 0
 
-            # ---- ROL & coverage ----
+            # ---- ROL, coverage, ROQ ----
             if hasattr(row, "recommended_rol"):
                 row.recommended_rol = data.get("recommended_rol") or 0
             if hasattr(row, "coverage_days"):
                 row.coverage_days = data.get("coverage_days") or 0
-            # If you later add ROQ field:
-            # if hasattr(row, "roq"):
-            #     row.roq = data.get("roq_suggested") or 0
+            if hasattr(row, "recommended_roq"):
+                row.recommended_roq = (
+                    data.get("recommended_roq")
+                    or data.get("roq_suggested")
+                    or 0
+                )
+
+            # ---- Stock & coverage from stock ----
+            if hasattr(row, "on_hand_qty"):
+                row.on_hand_qty = data.get("on_hand_qty") or 0
+            if hasattr(row, "projected_qty"):
+                row.projected_qty = data.get("projected_qty") or 0
+            if hasattr(row, "reserved_qty"):
+                row.reserved_qty = data.get("reserved_qty") or 0
+            if hasattr(row, "ordered_qty"):
+                row.ordered_qty = data.get("ordered_qty") or 0
+            if hasattr(row, "on_hand_coverage_days"):
+                row.on_hand_coverage_days = data.get("on_hand_coverage_days") or 0
+            if hasattr(row, "projected_coverage_days"):
+                row.projected_coverage_days = data.get("projected_coverage_days") or 0
+            if hasattr(row, "projected_minus_rol"):
+                row.projected_minus_rol = data.get("projected_minus_rol") or 0
 
     # ------------------------------------------------------------------
     # Helper to wipe calculated fields on a child row
@@ -136,7 +157,14 @@ class MaterialPlanningRequest(Document):
             "safety_day",
             "recommended_rol",
             "coverage_days",
-            # "roq",
+            "recommended_roq",
+            "on_hand_qty",
+            "projected_qty",
+            "reserved_qty",
+            "ordered_qty",
+            "on_hand_coverage_days",
+            "projected_coverage_days",
+            "projected_minus_rol",
         ):
             if hasattr(row, f):
                 setattr(row, f, 0)
@@ -328,8 +356,11 @@ def get_item_classification_for_mpr(item: str, cost_center: str) -> Dict:
       - safety_stock_unit, safety_day
       - recommended_rol
       - coverage_days
+      - recommended_roq (ROQ from policy)
+      - on_hand_qty, projected_qty, reserved_qty, ordered_qty
+      - on_hand_coverage_days, projected_coverage_days
+      - projected_minus_rol
       - policy_recommendation
-      - roq_suggested (if you add ROQ field)
     """
 
     item_code = (item or "").strip()
@@ -563,7 +594,7 @@ def get_item_classification_for_mpr(item: str, cost_center: str) -> Dict:
     out["recommended_rol"] = round(max(0.0, rol_suggested), 2)
 
     # -------------------------------------------------
-    # 8) Policy → coverage_days (MTS / MTS-Lite / MTO)
+    # 8) Policy → coverage_days (MTS / MTS-Lite / MTO) + ROQ
     # -------------------------------------------------
     policy = _pick_policy(abc_fine, xyz, fsn, customers_t12, cv, active_months_12)
     if policy == "MTS":
@@ -575,7 +606,65 @@ def get_item_classification_for_mpr(item: str, cost_center: str) -> Dict:
 
     out["coverage_days"] = coverage
     out["policy_recommendation"] = policy
-    out["roq_suggested"] = round(coverage * add_per_day, 2) if coverage and add_per_day > 0 else 0
+
+    roq_suggested = coverage * add_per_day if coverage and add_per_day > 0 else 0.0
+    out["roq_suggested"] = round(roq_suggested, 2)
+    out["recommended_roq"] = out["roq_suggested"]
+
+    # -------------------------------------------------
+    # 9) Stock snapshot (Bin) + coverage from stock
+    # -------------------------------------------------
+    on_hand_qty = 0.0
+    projected_qty = 0.0
+    reserved_qty = 0.0
+    ordered_qty = 0.0
+
+    if wh_cc_expr and cc_name:
+        stock_sql = f"""
+            SELECT
+                SUM(b.actual_qty)    AS on_hand_qty,
+                SUM(b.projected_qty) AS projected_qty,
+                SUM(b.reserved_qty)  AS reserved_qty,
+                SUM(b.ordered_qty)   AS ordered_qty
+            FROM `tabBin` b
+            JOIN `tabWarehouse` w ON w.name = b.warehouse
+            WHERE b.item_code = %(item_code)s
+              AND {wh_cc_expr} = %(cc)s
+        """
+        stock_rows = frappe.db.sql(
+            stock_sql,
+            {"item_code": item_code, "cc": cc_name},
+            as_dict=True,
+        )
+        if stock_rows:
+            s = stock_rows[0] or {}
+            on_hand_qty = float(s.get("on_hand_qty") or 0.0)
+            projected_qty = float(s.get("projected_qty") or 0.0)
+            reserved_qty = float(s.get("reserved_qty") or 0.0)
+            ordered_qty = float(s.get("ordered_qty") or 0.0)
+
+    out["on_hand_qty"] = round(on_hand_qty, 3)
+    out["projected_qty"] = round(projected_qty, 3)
+    out["reserved_qty"] = round(reserved_qty, 3)
+    out["ordered_qty"] = round(ordered_qty, 3)
+
+    if add_per_day > 0:
+        on_hand_cov = on_hand_qty / add_per_day
+        proj_cov = projected_qty / add_per_day
+    else:
+        on_hand_cov = 0.0
+        proj_cov = 0.0
+
+    out["on_hand_coverage_days"] = round(on_hand_cov, 2)
+    out["projected_coverage_days"] = round(proj_cov, 2)
+
+    # -------------------------------------------------
+    # 10) Projected – ROL units (surplus / shortage vs target ROL)
+    # -------------------------------------------------
+    recommended_rol_val = float(out.get("recommended_rol") or 0.0)
+    projected_val = float(out.get("projected_qty") or 0.0)
+    projected_minus_rol_units = projected_val - recommended_rol_val
+    out["projected_minus_rol"] = round(projected_minus_rol_units, 2)
 
     return out
 
@@ -594,7 +683,7 @@ def create_material_request_for_mpr(mpr_name: str) -> Dict:
           * recommended_rol > 0
         append a Material Request Item with:
           - item_code     = row.item
-          - qty           = row.recommended_rol
+          - qty           = row.recommended_rol (rounded for whole-number UOMs)
           - schedule_date = MPR.posting_date
           - company       = MPR.company
           - cost_center   = MPR.cost_center
@@ -625,9 +714,22 @@ def create_material_request_for_mpr(mpr_name: str) -> Dict:
         if not item_code or qty <= 0:
             continue
 
+        # --- handle whole-number UOMs (like Nos) ---
+        uom = (getattr(row, "uom", None) or "").strip()
+        if uom:
+            must_be_whole = frappe.db.get_value("UOM", uom, "must_be_whole_number")
+            if must_be_whole:
+                qty = math.ceil(qty)  # round UP to nearest whole number
+
+        # after rounding, still validate
+        if qty <= 0:
+            continue
+
         child = mr.append("items", {})
         child.item_code = item_code
         child.qty = qty
+        if uom:
+            child.uom = uom
         child.schedule_date = mpr.posting_date or today()
         child.company = mpr.company
         child.cost_center = mpr.cost_center
