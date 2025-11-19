@@ -47,10 +47,6 @@
   "on_site_proof",
   "column_break_llmv",
   "durationin_minutes",
-  "section_break_m68a",
-  "purpose",
-  "column_break_rtah",
-  "outcome",
   "notes_and_signals_section",
   "visit_item",
   "amended_from",
@@ -153,18 +149,6 @@
    "fieldtype": "Section Break"
   },
   {
-   "fieldname": "purpose",
-   "fieldtype": "Select",
-   "label": "Purpose",
-   "options": "Intro\nNeed Capture\nTech Discussion\nPrice Objection\nCollection\nComplaint\nCompetition\nDistributor Mgmt\nSite Audit"
-  },
-  {
-   "fieldname": "outcome",
-   "fieldtype": "Select",
-   "label": "Outcome",
-   "options": "Opportunity Created\nQuote Shared\nInfo Gathered\nRelationship\nNo Show\nRefused\nNext Step Needed"
-  },
-  {
    "fieldname": "amended_from",
    "fieldtype": "Link",
    "label": "Amended From",
@@ -214,10 +198,6 @@
    "label": "Phone"
   },
   {
-   "fieldname": "section_break_m68a",
-   "fieldtype": "Section Break"
-  },
-  {
    "fieldname": "column_break_llmv",
    "fieldtype": "Column Break"
   },
@@ -225,10 +205,6 @@
    "fieldname": "durationin_minutes",
    "fieldtype": "Date",
    "label": "Duration(In Minutes)"
-  },
-  {
-   "fieldname": "column_break_rtah",
-   "fieldtype": "Column Break"
   },
   {
    "fieldname": "notes_and_signals_section",
@@ -330,7 +306,7 @@
  "index_web_pages_for_search": 1,
  "is_submittable": 1,
  "links": [],
- "modified": "2025-11-10 17:29:53.163608",
+ "modified": "2025-11-19 11:40:35.958022",
  "modified_by": "Administrator",
  "module": "Bwm Custom",
  "name": "Visit Doctype",
