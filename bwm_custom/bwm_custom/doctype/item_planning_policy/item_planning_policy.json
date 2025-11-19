@@ -1,6 +1,7 @@
 {
  "actions": [],
  "allow_rename": 1,
+ "autoname": "naming_series:",
  "creation": "2025-11-09 11:49:38.022337",
  "doctype": "DocType",
  "engine": "InnoDB",
@@ -39,7 +40,8 @@
   "column_break_wjsr",
   "check_in_groups",
   "material_request_type",
-  "request_for_warehouse"
+  "request_for_warehouse",
+  "naming_series"
  ],
  "fields": [
   {
@@ -255,15 +257,22 @@
    "fieldtype": "Float",
    "label": "Unit 365",
    "read_only": 1
+  },
+  {
+   "fieldname": "naming_series",
+   "fieldtype": "Select",
+   "label": "Naming Series",
+   "options": "IPP.-.YYYY.-.####"
   }
  ],
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2025-11-14 15:49:09.035186",
+ "modified": "2025-11-19 11:25:32.624993",
  "modified_by": "Administrator",
  "module": "Bwm Custom",
  "name": "Item Planning Policy",
+ "naming_rule": "By \"Naming Series\" field",
  "owner": "Administrator",
  "permissions": [
   {

@@ -5,6 +5,7 @@
 from typing import Dict, Optional, Tuple
 import math
 import statistics
+import json
 
 import frappe
 from frappe.model.document import Document
@@ -19,7 +20,8 @@ class MaterialPlanningRequest(Document):
       - cost_center  (Link Cost Center)
       - posting_date (Date)
       - company      (Link Company)
-      - create_wo    (Button)  ← you can rename the label to "Create Material Request"
+      - warehouse    (Link Warehouse)
+      - create_wo    (Button)
       - material_planning_request_item (Table → Material Planning Request Item)
     """
 
@@ -345,22 +347,7 @@ def get_item_classification_for_mpr(item: str, cost_center: str) -> Dict:
       - item
       - cost_center
 
-    Returns a dict with keys that map directly to child fields:
-      - item_classification (A1/A2/B1/B2/...)
-      - xyz_classification (X/Y/Z)
-      - fsn               (F/S/N)
-      - customer_count
-      - avg_monthly_qty, sd, total_units, cv
-      - p50, p80, lt_used_days
-      - add_per_day, sigma_daily
-      - safety_stock_unit, safety_day
-      - recommended_rol
-      - coverage_days
-      - recommended_roq (ROQ from policy)
-      - on_hand_qty, projected_qty, reserved_qty, ordered_qty
-      - on_hand_coverage_days, projected_coverage_days
-      - projected_minus_rol
-      - policy_recommendation
+    Returns a dict with keys that map directly to child fields.
     """
 
     item_code = (item or "").strip()
@@ -672,13 +659,17 @@ def get_item_classification_for_mpr(item: str, cost_center: str) -> Dict:
 # ------------------------- Material Request creation from MPR ------------------------- #
 
 @frappe.whitelist()
-def create_material_request_for_mpr(mpr_name: str) -> Dict:
+def create_material_request_for_mpr(
+    mpr_name: str,
+    rows: Optional[object] = None,
+) -> Dict:
     """
     Called from the 'Create Material Request' button on Material Planning Request.
 
     Logic:
       - Create ONE Material Request (Draft)
-      - For each child row with:
+      - Only for selected child rows (rows arg)
+      - For each selected row with:
           * item
           * recommended_rol > 0
         append a Material Request Item with:
@@ -687,12 +678,26 @@ def create_material_request_for_mpr(mpr_name: str) -> Dict:
           - schedule_date = MPR.posting_date
           - company       = MPR.company
           - cost_center   = MPR.cost_center
-
-    Returns:
-      { "mpr": <name>, "material_request": "<MR-0001>" }
+          - warehouse     = MPR.warehouse
     """
     if not mpr_name:
         frappe.throw("Material Planning Request name is required")
+
+    # normalise 'rows' -> Python set of child row names
+    selected_names = set()
+
+    if isinstance(rows, str):
+        try:
+            parsed = json.loads(rows)
+        except Exception:
+            parsed = [rows]
+        if isinstance(parsed, (list, tuple, set)):
+            selected_names = {str(x) for x in parsed}
+    elif isinstance(rows, (list, tuple, set)):
+        selected_names = {str(x) for x in rows}
+
+    if not selected_names:
+        frappe.throw("Please select at least one row in Material Planning Request Item.")
 
     mpr = frappe.get_doc("Material Planning Request", mpr_name)
 
@@ -700,14 +705,20 @@ def create_material_request_for_mpr(mpr_name: str) -> Dict:
         frappe.throw("Please set Company on the Material Planning Request")
     if not mpr.cost_center:
         frappe.throw("Please set Cost Center on the Material Planning Request")
+    if not getattr(mpr, "warehouse", None):
+        frappe.throw("Please set Warehouse on the Material Planning Request")
 
     mr = frappe.new_doc("Material Request")
     mr.company = mpr.company
-    mr.material_request_type = "Purchase"  # change to "Material Transfer" etc. if needed
+    mr.material_request_type = "Purchase"  # change if needed
     mr.transaction_date = mpr.posting_date or today()
     mr.schedule_date = mpr.posting_date or today()
 
     for row in (mpr.material_planning_request_item or []):
+        # only selected rows
+        if row.name not in selected_names:
+            continue
+
         item_code = (row.item or "").strip()
         qty = float(row.recommended_rol or 0)
 
@@ -721,7 +732,6 @@ def create_material_request_for_mpr(mpr_name: str) -> Dict:
             if must_be_whole:
                 qty = math.ceil(qty)  # round UP to nearest whole number
 
-        # after rounding, still validate
         if qty <= 0:
             continue
 
@@ -733,11 +743,10 @@ def create_material_request_for_mpr(mpr_name: str) -> Dict:
         child.schedule_date = mpr.posting_date or today()
         child.company = mpr.company
         child.cost_center = mpr.cost_center
-        # if you have a default warehouse, set it here:
-        # child.warehouse = "<Default Warehouse>"
+        child.warehouse = mpr.warehouse  # from parent MPR
 
     if not mr.items:
-        frappe.throw("No items with Recommended ROL > 0 to create Material Request.")
+        frappe.throw("No selected items with Recommended ROL > 0 to create Material Request.")
 
     mr.insert(ignore_permissions=False)
     frappe.db.commit()
