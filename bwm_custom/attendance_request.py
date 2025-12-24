@@ -2,53 +2,52 @@ import frappe
 from typing import Optional
 
 # Fieldnames on Attendance Request
-APPLICANT_EMAIL_FIELD = "custom_employee_email_id"   # applicant's email
-APPROVER_EMAIL_FIELD  = "custom_leave_approver_"     # approver's email  (confirm this fieldname)
+APPLICANT_EMAIL_FIELD = "custom_employee_email_id"     # applicant's email (Data)
+APPROVER_EMAIL_FIELD  = "custom_leave_approver_"       # approver's email (Data)
 
 HR_ROLES = {"HR Manager", "HR User", "System Manager", "Administrator"}
 
-
-def get_permission_query_conditions(
-    user: Optional[str] = None,
-    doctype: Optional[str] = None,
-    **kwargs
-) -> str:
+def get_permission_query_conditions(user: Optional[str] = None,
+                                    doctype: Optional[str] = None,
+                                    **kwargs) -> str:
     """
-    Visibility:
-      - HR roles (HR Manager, HR User, System Manager, Administrator): see all
-      - Others (ESS / ESS Approver): show if login email matches applicant OR approver
+    List / report filter:
+      - HR roles: see all
+      - Others: see only if applicant OR approver email matches the login user
     """
     user = user or frappe.session.user
     roles = set(frappe.get_roles(user))
 
-    # Unrestricted for HR/system roles
     if HR_ROLES & roles:
         return ""
 
-    # Build table name safely (hooks will pass the correct doctype)
-    table = f"`tab{doctype or 'Attendance Request'}`"
+    dt = doctype or "Attendance Request"
+    table = f"`tab{dt}`"
+    user_sql = frappe.db.escape((user or "").strip().lower())
 
-    # Escape the user string for SQL
-    user_sql = frappe.db.escape(user)
-
-    # Filter: applicant == user OR approver == user
+    # IMPORTANT: wrap OR inside parentheses
     return (
-        f"{table}.`{APPLICANT_EMAIL_FIELD}` = {user_sql} "
-        f"OR {table}.`{APPROVER_EMAIL_FIELD}` = {user_sql}"
+        f"("
+        f"LOWER(TRIM({table}.`{APPLICANT_EMAIL_FIELD}`)) = {user_sql} "
+        f"OR "
+        f"LOWER(TRIM({table}.`{APPROVER_EMAIL_FIELD}`)) = {user_sql}"
+        f")"
     )
 
-
-def has_permission(doc, ptype: str, user: str) -> bool:
+def has_permission(doc, ptype: str = "read", user: Optional[str] = None) -> bool:
     """
     Record-level check:
       - HR roles: always True
-      - Others: allowed if doc.applicant_email == user OR doc.approver_email == user
+      - Others: allowed if applicant OR approver email matches
     """
+    user = user or frappe.session.user
     roles = set(frappe.get_roles(user))
+
     if HR_ROLES & roles:
         return True
 
-    applicant_email = getattr(doc, APPLICANT_EMAIL_FIELD, None)
-    approver_email  = getattr(doc, APPROVER_EMAIL_FIELD, None)
+    u = (user or "").strip().lower()
+    applicant_email = (getattr(doc, APPLICANT_EMAIL_FIELD, "") or "").strip().lower()
+    approver_email  = (getattr(doc, APPROVER_EMAIL_FIELD, "") or "").strip().lower()
 
-    return (applicant_email == user) or (approver_email == user)
+    return (applicant_email == u) or (approver_email == u)
