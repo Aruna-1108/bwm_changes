@@ -1,18 +1,3 @@
-// frappe.ui.form.on("India Mart API Settings", {
-//   refresh(frm) {
-//     if (frm.is_new()) return;
-
-//     frm.add_custom_button("Run IndiaMART Sync", async () => {
-//       await frappe.call({
-//         method: "bwm_custom.integrations.indiamart.sync.run_sync_for_setting",
-//         args: { setting_name: frm.doc.name }
-//       });
-//       frappe.msgprint("Sync completed. Check India MART Sync Log.");
-//     });
-//   }
-// });
-
-
 frappe.ui.form.on("IndiaMART Enquiry Details", {
   refresh(frm) {
     if (frm.is_new()) return;
@@ -25,34 +10,39 @@ frappe.ui.form.on("IndiaMART Enquiry Details", {
       return;
     }
 
-    // Create Lead (no backend insert) -> open new Lead with prefilled values
-    frm.add_custom_button("Create Lead", () => {
-      const full_name = (frm.doc.full_name || "").trim();
-      if (!full_name) {
-        frappe.msgprint("Full Name is required.");
-        return;
+    frm.add_custom_button("Create Lead", async () => {
+      try {
+        const r = await frappe.call({
+          method:"bwm_custom.bwm_custom.lead.upsert_lead_from_indiamart",
+          args: { enquiry_name: frm.doc.name }
+        });
+
+        const out = (r && r.message) ? r.message : null;
+        if (!out || !out.lead) {
+          frappe.msgprint("No Lead returned from server.");
+          return;
+        }
+
+        if (out.created) {
+          frappe.show_alert({ message: "Lead created: " + out.lead, indicator: "green" });
+        } else if (out.duplicate) {
+          frappe.show_alert({ message: "Lead found: " + out.lead + " (Enquiry already exists)", indicator: "orange" });
+        } else {
+          frappe.show_alert({ message: "Lead found: " + out.lead + " (Enquiry appended)", indicator: "green" });
+        }
+
+        await frm.reload_doc();
+        frappe.set_route("Form", "Lead", out.lead);
+
+      } catch (e) {
+        console.error(e);
+
+        // If server throws frappe.throw, message is often in e.message or e._server_messages
+        frappe.msgprint(
+          "Not permitted / server error.<br><br>" +
+          "Click 'Copy error to clipboard' and share the full message."
+        );
       }
-
-      // IMPORTANT:
-      // Lead.country in ERPNext usually expects "India" (Country master), not "IN"
-      const country_val = (frm.doc.country || "").trim();
-      const country = (country_val === "IN") ? "India" : country_val;
-
-      // Prefill values using route_options
-      frappe.route_options = {
-        first_name: full_name,
-        lead_name: full_name,
-        company_name: frm.doc.company || "",
-        mobile_no: frm.doc.mobile || "",
-        email_id: frm.doc.email || "",
-        city: frm.doc.city || "",
-        state: frm.doc.state || "",
-        country: country || "",
-        notes: frm.doc.message || ""
-      };
-
-      // Open new Lead form
-      frappe.new_doc("Lead");
     });
   }
 });

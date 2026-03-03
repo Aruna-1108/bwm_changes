@@ -64,8 +64,7 @@
    "fieldname": "lead",
    "fieldtype": "Link",
    "label": "Lead",
-   "options": "Lead",
-   "read_only": 1
+   "options": "Lead"
   },
   {
    "fieldname": "section_break_cdsz",
@@ -278,7 +277,7 @@
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-03-02 10:34:03.000275",
+ "modified": "2026-03-03 13:15:00.509399",
  "modified_by": "Administrator",
  "module": "Bwm Custom",
  "name": "IndiaMART Enquiry Details",
