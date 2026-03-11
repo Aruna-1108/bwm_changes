@@ -1,0 +1,112 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "creation": "2026-02-27 15:13:43.556949",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "account_name",
+  "enabled",
+  "company",
+  "api_base_url",
+  "api_key",
+  "api_secret",
+  "last_success_sync_on",
+  "last_cursor",
+  "lead_user",
+  "mobile_no",
+  "from_date_time",
+  "to_date_time"
+ ],
+ "fields": [
+  {
+   "fieldname": "account_name",
+   "fieldtype": "Data",
+   "label": "Account Name"
+  },
+  {
+   "default": "0",
+   "fieldname": "enabled",
+   "fieldtype": "Check",
+   "label": "Enabled"
+  },
+  {
+   "fieldname": "company",
+   "fieldtype": "Link",
+   "label": "Company",
+   "options": "Company"
+  },
+  {
+   "fieldname": "api_base_url",
+   "fieldtype": "Data",
+   "label": "API Base URL"
+  },
+  {
+   "fieldname": "api_key",
+   "fieldtype": "Password",
+   "label": "API Key"
+  },
+  {
+   "fieldname": "api_secret",
+   "fieldtype": "Password",
+   "label": "API Secret"
+  },
+  {
+   "fieldname": "last_success_sync_on",
+   "fieldtype": "Datetime",
+   "label": "Last Success Sync On"
+  },
+  {
+   "fieldname": "last_cursor",
+   "fieldtype": "Datetime",
+   "label": "Last Cursor"
+  },
+  {
+   "fieldname": "lead_user",
+   "fieldtype": "Link",
+   "label": "Lead user",
+   "options": "User"
+  },
+  {
+   "fieldname": "mobile_no",
+   "fieldtype": "Data",
+   "label": "Mobile No"
+  },
+  {
+   "fieldname": "from_date_time",
+   "fieldtype": "Datetime",
+   "label": "From Date Time"
+  },
+  {
+   "fieldname": "to_date_time",
+   "fieldtype": "Datetime",
+   "label": "To Date Time"
+  }
+ ],
+ "grid_page_length": 50,
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2026-02-28 17:15:59.195166",
+ "modified_by": "Administrator",
+ "module": "Bwm Custom",
+ "name": "India Mart API Settings",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "row_format": "Dynamic",
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

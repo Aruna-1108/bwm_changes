@@ -1,0 +1,326 @@
+{
+ "actions": [],
+ "allow_import": 1,
+ "allow_rename": 1,
+ "autoname": "naming_series:",
+ "creation": "2026-02-27 15:20:34.396523",
+ "default_view": "List",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "naming_series",
+  "lead",
+  "section_break_cdsz",
+  "full_name",
+  "company",
+  "column_break_c7ree",
+  "query_type",
+  "status",
+  "contact_details_section",
+  "mobile",
+  "phone",
+  "email",
+  "column_break_s20ze",
+  "mobile_2",
+  "phone_2",
+  "email_2",
+  "section_break_caogz",
+  "product_name",
+  "product_category",
+  "subject",
+  "column_break_3tnen",
+  "receiver_mobile",
+  "sender_id",
+  "call_duration",
+  "address_section",
+  "pin_code",
+  "city",
+  "state",
+  "country",
+  "date",
+  "time",
+  "column_break_e47nk",
+  "address",
+  "message_section",
+  "message",
+  "section_break_joto",
+  "indiamart_api_setting_id",
+  "enquiry_datetime",
+  "column_break_qwot",
+  "im_enquiry_id",
+  "sync_status",
+  "lead_user"
+ ],
+ "fields": [
+  {
+   "fieldname": "naming_series",
+   "fieldtype": "Select",
+   "hidden": 1,
+   "label": "Series",
+   "options": "IND.-.{date}.-"
+  },
+  {
+   "fieldname": "lead",
+   "fieldtype": "Link",
+   "label": "Lead",
+   "options": "Lead"
+  },
+  {
+   "fieldname": "section_break_cdsz",
+   "fieldtype": "Section Break"
+  },
+  {
+   "fieldname": "full_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Full Name"
+  },
+  {
+   "fieldname": "company",
+   "fieldtype": "Data",
+   "label": "Company"
+  },
+  {
+   "fieldname": "column_break_c7ree",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "query_type",
+   "fieldtype": "Select",
+   "label": "Query Type",
+   "options": "Call\nBuy Lead\nDirect"
+  },
+  {
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "in_standard_filter": 1,
+   "label": "Indiamart Status",
+   "options": "Open\nLead Converted\nNot Interested\nDo Not Contact\nRepeat Enquiry"
+  },
+  {
+   "fieldname": "contact_details_section",
+   "fieldtype": "Section Break",
+   "label": "Contact Details"
+  },
+  {
+   "fieldname": "mobile",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Mobile"
+  },
+  {
+   "fieldname": "phone",
+   "fieldtype": "Data",
+   "label": "Phone"
+  },
+  {
+   "fieldname": "email",
+   "fieldtype": "Data",
+   "label": "Email"
+  },
+  {
+   "fieldname": "column_break_s20ze",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "mobile_2",
+   "fieldtype": "Data",
+   "label": "Mobile 2"
+  },
+  {
+   "fieldname": "phone_2",
+   "fieldtype": "Data",
+   "label": "Phone 2"
+  },
+  {
+   "fieldname": "email_2",
+   "fieldtype": "Data",
+   "label": "Email 2"
+  },
+  {
+   "fieldname": "section_break_caogz",
+   "fieldtype": "Section Break"
+  },
+  {
+   "fieldname": "product_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Product Name"
+  },
+  {
+   "fieldname": "product_category",
+   "fieldtype": "Data",
+   "label": "Product Category"
+  },
+  {
+   "fieldname": "subject",
+   "fieldtype": "Data",
+   "label": "Subject"
+  },
+  {
+   "fieldname": "column_break_3tnen",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "receiver_mobile",
+   "fieldtype": "Data",
+   "label": "Receiver Mobile"
+  },
+  {
+   "fieldname": "sender_id",
+   "fieldtype": "Data",
+   "label": "sender_id"
+  },
+  {
+   "fieldname": "call_duration",
+   "fieldtype": "Data",
+   "label": "Call Duration"
+  },
+  {
+   "fieldname": "address_section",
+   "fieldtype": "Section Break",
+   "label": "Address"
+  },
+  {
+   "fieldname": "pin_code",
+   "fieldtype": "Data",
+   "label": "Pin Code"
+  },
+  {
+   "fieldname": "city",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "City"
+  },
+  {
+   "fieldname": "state",
+   "fieldtype": "Data",
+   "label": "State"
+  },
+  {
+   "fieldname": "country",
+   "fieldtype": "Data",
+   "label": "Country"
+  },
+  {
+   "fieldname": "date",
+   "fieldtype": "Date",
+   "label": "Date"
+  },
+  {
+   "fieldname": "time",
+   "fieldtype": "Time",
+   "label": "Time"
+  },
+  {
+   "fieldname": "column_break_e47nk",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "address",
+   "fieldtype": "Text",
+   "label": "Address"
+  },
+  {
+   "fieldname": "message_section",
+   "fieldtype": "Section Break",
+   "label": "Message"
+  },
+  {
+   "fieldname": "message",
+   "fieldtype": "Small Text",
+   "label": "Message"
+  },
+  {
+   "fieldname": "section_break_joto",
+   "fieldtype": "Section Break"
+  },
+  {
+   "fieldname": "indiamart_api_setting_id",
+   "fieldtype": "Link",
+   "label": "Indiamart API Setting ID",
+   "options": "India Mart API Settings"
+  },
+  {
+   "fieldname": "enquiry_datetime",
+   "fieldtype": "Datetime",
+   "label": "Enquiry DateTime"
+  },
+  {
+   "fieldname": "column_break_qwot",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "im_enquiry_id",
+   "fieldtype": "Data",
+   "label": "IM Enquiry ID",
+   "unique": 1
+  },
+  {
+   "fieldname": "sync_status",
+   "fieldtype": "Select",
+   "label": "Sync Status",
+   "options": "New\nConverted\nDuplicate\nError"
+  },
+  {
+   "fieldname": "lead_user",
+   "fieldtype": "Link",
+   "label": "Lead User",
+   "options": "User"
+  }
+ ],
+ "grid_page_length": 50,
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2026-03-03 13:15:00.509399",
+ "modified_by": "Administrator",
+ "module": "Bwm Custom",
+ "name": "IndiaMART Enquiry Details",
+ "naming_rule": "By \"Naming Series\" field",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "row_format": "Dynamic",
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [
+  {
+   "color": "Orange",
+   "title": "Open"
+  },
+  {
+   "color": "Yellow",
+   "title": "Repeat Enquiry"
+  },
+  {
+   "color": "Green",
+   "title": "Lead Converted"
+  },
+  {
+   "color": "Gray",
+   "title": "Not Interested"
+  },
+  {
+   "color": "Red",
+   "title": "Do Not Contact"
+  }
+ ],
+ "title_field": "full_name"
+}
