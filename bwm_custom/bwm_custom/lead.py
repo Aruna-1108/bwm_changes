@@ -2,30 +2,28 @@ import frappe
 
 
 def _s(v):
-    return (v or "").strip()
+    return str(v or "").strip()
 
 
 @frappe.whitelist()
-def upsert_lead_from_indiamart(enquiry_name: str):
+def upsert_lead_from_indiamart(enquiry_name):
     """
     IndiaMART Enquiry -> Lead Upsert
 
     Rules:
     1) Find existing Lead by mobile_no first, else email_id
-    2) If Lead exists: APPEND a child row to Lead.custom_enquiry_details
+    2) If Lead exists: append a child row to Lead.custom_enquiry_details
        - prevent duplicate by indiamart_enquiry_id
-    3) If Lead not exists: CREATE Lead with 1 child row
+    3) If Lead not exists: create Lead with 1 child row
     4) Update IndiaMART Enquiry Details:
        - status = "Lead Converted"
        - sync_status = "Converted"
        - lead = lead_name (if field exists)
-    5) Clear, specific permission error messages
     """
 
     if not enquiry_name:
         frappe.throw("Missing enquiry_name")
 
-    # Permission: must read enquiry
     if not frappe.has_permission("IndiaMART Enquiry Details", "read", enquiry_name):
         frappe.throw("Not permitted: need READ on IndiaMART Enquiry Details")
 
@@ -47,14 +45,12 @@ def upsert_lead_from_indiamart(enquiry_name: str):
 
     enquiry_id = _s(getattr(enq, "im_enquiry_id", ""))
 
-    # ---- Find existing lead (mobile preferred, then email) ----
     lead_name = ""
     if mobile:
         lead_name = frappe.db.get_value("Lead", {"mobile_no": mobile}, "name") or ""
     if not lead_name and email:
         lead_name = frappe.db.get_value("Lead", {"email_id": email}, "name") or ""
 
-    # ---- Build enquiry row (child table fields) ----
     row_values = {
         "enquiry_date": getattr(enq, "date", "") or "",
         "product_name": getattr(enq, "product_name", "") or "",
@@ -68,18 +64,15 @@ def upsert_lead_from_indiamart(enquiry_name: str):
     appended = 0
     duplicate = 0
 
-    # ---- Append to existing lead ----
     if lead_name:
         if not frappe.has_permission("Lead", "write", lead_name):
             frappe.throw("Not permitted: need WRITE on Lead " + lead_name)
 
         lead = frappe.get_doc("Lead", lead_name)
 
-        # Ensure the custom child table exists
         if not hasattr(lead, "custom_enquiry_details"):
             frappe.throw("Lead is missing field: custom_enquiry_details")
 
-        # Duplicate check by enquiry_id
         if enquiry_id:
             for r in (lead.custom_enquiry_details or []):
                 if _s(getattr(r, "indiamart_enquiry_id", "")) == enquiry_id:
@@ -91,7 +84,6 @@ def upsert_lead_from_indiamart(enquiry_name: str):
             lead.save(ignore_permissions=False)
             appended = 1
 
-    # ---- Create new lead ----
     else:
         if not frappe.has_permission("Lead", "create"):
             frappe.throw("Not permitted: need CREATE on Lead")
@@ -115,7 +107,6 @@ def upsert_lead_from_indiamart(enquiry_name: str):
         lead_name = lead.name
         created = 1
 
-    # ---- Update IndiaMART Enquiry Details ----
     if not frappe.has_permission("IndiaMART Enquiry Details", "write", enq.name):
         frappe.throw("Not permitted: need WRITE on IndiaMART Enquiry Details")
 
@@ -131,8 +122,6 @@ def upsert_lead_from_indiamart(enquiry_name: str):
 
     if update_map:
         frappe.db.set_value("IndiaMART Enquiry Details", enq.name, update_map)
-
-    frappe.db.commit()
 
     return {
         "lead": lead_name,
