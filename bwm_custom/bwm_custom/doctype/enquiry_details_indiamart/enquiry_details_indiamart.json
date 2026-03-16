@@ -1,0 +1,65 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "creation": "2026-03-12 20:49:29.509235",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "enquiry_date",
+  "product_name",
+  "product_category",
+  "remarks",
+  "enquiry_owner",
+  "indiamart_enquiry_id"
+ ],
+ "fields": [
+  {
+   "fieldname": "enquiry_date",
+   "fieldtype": "Date",
+   "in_list_view": 1,
+   "label": "Date"
+  },
+  {
+   "fieldname": "product_name",
+   "fieldtype": "Data",
+   "label": "Product Name"
+  },
+  {
+   "fieldname": "product_category",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Product Category"
+  },
+  {
+   "fieldname": "remarks",
+   "fieldtype": "Small Text",
+   "label": "Remarks"
+  },
+  {
+   "fieldname": "enquiry_owner",
+   "fieldtype": "Link",
+   "label": "Enquiry Owner",
+   "options": "User"
+  },
+  {
+   "fieldname": "indiamart_enquiry_id",
+   "fieldtype": "Data",
+   "label": "IndiaMart Enquiry ID"
+  }
+ ],
+ "grid_page_length": 50,
+ "index_web_pages_for_search": 1,
+ "istable": 1,
+ "links": [],
+ "modified": "2026-03-12 20:52:45.205352",
+ "modified_by": "Administrator",
+ "module": "Bwm Custom",
+ "name": "Enquiry Details IndiaMart",
+ "owner": "Administrator",
+ "permissions": [],
+ "row_format": "Dynamic",
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

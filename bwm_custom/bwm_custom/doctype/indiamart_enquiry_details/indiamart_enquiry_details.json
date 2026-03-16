@@ -47,6 +47,7 @@
   "section_break_joto",
   "indiamart_api_setting_id",
   "enquiry_datetime",
+  "territory",
   "column_break_qwot",
   "im_enquiry_id",
   "sync_status",
@@ -272,12 +273,18 @@
    "fieldtype": "Link",
    "label": "Lead User",
    "options": "User"
+  },
+  {
+   "fieldname": "territory",
+   "fieldtype": "Table MultiSelect",
+   "label": "Territory",
+   "options": "Territory Mutliselect"
   }
  ],
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-03-03 13:15:00.509399",
+ "modified": "2026-03-16 09:44:07.613772",
  "modified_by": "Administrator",
  "module": "Bwm Custom",
  "name": "IndiaMART Enquiry Details",

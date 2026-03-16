@@ -173,6 +173,79 @@ def _guess_query_type(row):
     return "Direct"
 
 
+# =========================
+# NEW: Territory Mapping
+# =========================
+def _norm_txt(v):
+    return " ".join((v or "").strip().lower().split())
+
+
+def _get_table_multiselect_link_field():
+    meta = frappe.get_meta(ENQUIRY_DOCTYPE)
+    table_field = meta.get_field("territory")
+    if not table_field or not table_field.options:
+        return ""
+
+    child_dt = table_field.options
+    child_meta = frappe.get_meta(child_dt)
+
+    for df in child_meta.fields:
+        if df.fieldtype == "Link" and df.options == "Territory":
+            return df.fieldname
+
+    for df in child_meta.fields:
+        if df.fieldtype == "Link":
+            return df.fieldname
+
+    return ""
+
+
+def _get_mapping_doc(settings_name, state_name):
+    state_name_norm = _norm_txt(state_name)
+    if not settings_name or not state_name_norm:
+        return None
+
+    rows = frappe.get_all(
+        "IndiaMART Mapping",
+        filters={"india_mart_api_settings": settings_name},
+        fields=["name", "state"]
+    )
+
+    for row in rows:
+        if _norm_txt(row.get("state")) == state_name_norm:
+            return frappe.get_doc("IndiaMART Mapping", row.get("name"))
+
+    return None
+
+
+def _set_territory_rows(doc, settings_name, state_name):
+    mapping_doc = _get_mapping_doc(settings_name, state_name)
+    if not mapping_doc:
+        return
+
+    link_field = _get_table_multiselect_link_field()
+    if not link_field:
+        return
+
+    existing_values = []
+    current_rows = doc.get("territory") or []
+    for row in current_rows:
+        existing_values.append(_safe_str(row.get(link_field)))
+
+    for map_row in (mapping_doc.get("territory") or []):
+        territory_name = _safe_str(map_row.get("territory"))
+        if not territory_name:
+            continue
+
+        if territory_name in existing_values:
+            continue
+
+        doc.append("territory", {
+            link_field: territory_name
+        })
+        existing_values.append(territory_name)
+
+
 def _create_sync_log(settings_name):
     doc = frappe.get_doc({
         "doctype": LOG_DOCTYPE,
@@ -232,11 +305,12 @@ def _upsert_enquiry(row, settings_doc):
     )
 
     enquiry_dt = _parse_enquiry_datetime(row)
+    enquiry_state = _guess_state(row)
 
     data = {
         "im_enquiry_id": im_enquiry_id,
         "indiamart_api_setting_id": settings_doc.name,
-        "lead_user":settings_doc.lead_user,
+        "lead_user": settings_doc.lead_user,
 
         "full_name": _guess_full_name(row),
         "company": _guess_company(row),
@@ -252,7 +326,7 @@ def _upsert_enquiry(row, settings_doc):
         "subject": _guess_subject(row),
 
         "city": _guess_city(row),
-        "state": _guess_state(row),
+        "state": enquiry_state,
         "country": _guess_country(row),
 
         "pin_code": _guess_pincode(row),
@@ -278,6 +352,10 @@ def _upsert_enquiry(row, settings_doc):
         for k, v in data.items():
             if v is not None and v != "":
                 doc.set(k, v)
+
+        # NEW: tag territory from IndiaMART Mapping using setting + state
+        _set_territory_rows(doc, settings_doc.name, enquiry_state)
+
         doc.save(ignore_permissions=True)
         return "duplicate"
 
@@ -285,6 +363,10 @@ def _upsert_enquiry(row, settings_doc):
     for k, v in data.items():
         if v is not None and v != "":
             doc.set(k, v)
+
+    # NEW: tag territory from IndiaMART Mapping using setting + state
+    _set_territory_rows(doc, settings_doc.name, enquiry_state)
+
     doc.insert(ignore_permissions=True)
     return "created"
 
