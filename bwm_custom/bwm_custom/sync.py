@@ -144,7 +144,6 @@ def _guess_message(row):
     return _safe_str(row.get("QUERY_MESSAGE") or row.get("ENQ_MESSAGE") or row.get("MESSAGE") or "")
 
 
-# ✅ FIXED MAPPING HERE
 def _guess_query_type(row):
     """
     Your DocType allows: Call, Buy Lead, Direct
@@ -174,7 +173,7 @@ def _guess_query_type(row):
 
 
 # =========================
-# NEW: Territory Mapping
+# Territory Mapping
 # =========================
 def _norm_txt(v):
     return " ".join((v or "").strip().lower().split())
@@ -199,27 +198,32 @@ def _get_table_multiselect_link_field():
 
     return ""
 
+# CHANGED: now mapping by CITY instead of STATE
+def _get_mapping_doc(settings_name, city_name):
+    city_name_norm = _norm_txt(city_name)
+    if not settings_name or not city_name_norm:
+        return None
 
-def _get_mapping_doc(settings_name, state_name):
-    state_name_norm = _norm_txt(state_name)
-    if not settings_name or not state_name_norm:
+    meta = frappe.get_meta("IndiaMART Mapping")
+    if not meta.has_field("city"):
         return None
 
     rows = frappe.get_all(
         "IndiaMART Mapping",
         filters={"india_mart_api_settings": settings_name},
-        fields=["name", "state"]
+        fields=["name", "city"]
     )
 
     for row in rows:
-        if _norm_txt(row.get("state")) == state_name_norm:
+        if _norm_txt(row.get("city")) == city_name_norm:
             return frappe.get_doc("IndiaMART Mapping", row.get("name"))
 
     return None
 
 
-def _set_territory_rows(doc, settings_name, state_name):
-    mapping_doc = _get_mapping_doc(settings_name, state_name)
+# CHANGED: now receives city_name instead of state_name
+def _set_territory_rows(doc, settings_name, city_name):
+    mapping_doc = _get_mapping_doc(settings_name, city_name)
     if not mapping_doc:
         return
 
@@ -306,6 +310,7 @@ def _upsert_enquiry(row, settings_doc):
 
     enquiry_dt = _parse_enquiry_datetime(row)
     enquiry_state = _guess_state(row)
+    enquiry_city = _guess_city(row)
 
     data = {
         "im_enquiry_id": im_enquiry_id,
@@ -325,7 +330,7 @@ def _upsert_enquiry(row, settings_doc):
         "product_name": _guess_product_name(row),
         "subject": _guess_subject(row),
 
-        "city": _guess_city(row),
+        "city": enquiry_city,
         "state": enquiry_state,
         "country": _guess_country(row),
 
@@ -353,8 +358,8 @@ def _upsert_enquiry(row, settings_doc):
             if v is not None and v != "":
                 doc.set(k, v)
 
-        # NEW: tag territory from IndiaMART Mapping using setting + state
-        _set_territory_rows(doc, settings_doc.name, enquiry_state)
+        # CHANGED: tag territory from IndiaMART Mapping using setting + city
+        _set_territory_rows(doc, settings_doc.name, enquiry_city)
 
         doc.save(ignore_permissions=True)
         return "duplicate"
@@ -364,8 +369,8 @@ def _upsert_enquiry(row, settings_doc):
         if v is not None and v != "":
             doc.set(k, v)
 
-    # NEW: tag territory from IndiaMART Mapping using setting + state
-    _set_territory_rows(doc, settings_doc.name, enquiry_state)
+    # CHANGED: tag territory from IndiaMART Mapping using setting + city
+    _set_territory_rows(doc, settings_doc.name, enquiry_city)
 
     doc.insert(ignore_permissions=True)
     return "created"
@@ -390,7 +395,6 @@ def run_sync(setting_name):
     if not api_base_url:
         _throw("API Base URL is missing in India Mart API Settings.")
 
-    # api_key is Password field -> get_password
     api_key = _safe_str(settings_doc.get_password("api_key"))
     if not api_key:
         _throw("API Key is missing or not saved properly in India Mart API Settings.")
