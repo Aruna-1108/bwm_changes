@@ -34,6 +34,7 @@ def get_permission_query_conditions(user: Optional[str] = None,
         f")"
     )
 
+
 def has_permission(doc, ptype: str = "read", user: Optional[str] = None) -> bool:
     """
     Record-level check:
