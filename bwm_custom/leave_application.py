@@ -1,4 +1,5 @@
 import frappe
+
 APPLICANT_EMAIL_FIELD = "custom_employee_email_id"
 APPROVER_FIELD = "leave_approver"
 EMPLOYEE_FIELD = "employee"
@@ -67,4 +68,4 @@ def has_permission(doc, ptype, user=None):
         if employee_user == user:
             return True
 
-    return False
+    return None
