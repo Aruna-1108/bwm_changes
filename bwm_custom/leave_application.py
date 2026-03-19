@@ -66,21 +66,17 @@ def has_permission(doc, ptype, user=None):
     approver_email = norm(getattr(doc, APPROVER_FIELD, None))
     employee = getattr(doc, EMPLOYEE_FIELD, None)
 
-    # Direct approver
     if approver_email == user:
         return True
 
-    # Applicant email
     if applicant_email == user:
         return True
 
     if employee:
-        # Employee himself
         employee_user = norm(frappe.db.get_value("Employee", employee, "user_id"))
         if employee_user == user:
             return True
 
-        # Reporting manager
         reports_to = frappe.db.get_value("Employee", employee, "reports_to")
         if reports_to:
             manager_user = norm(frappe.db.get_value("Employee", reports_to, "user_id"))
