@@ -35,11 +35,20 @@ def get_permission_query_conditions(user=None, doctype=None, **kwargs):
                 WHERE emp.name = {table}.`{employee_field}`
                   AND {emp_user_expr} = {user}
             )
+            OR EXISTS (
+                SELECT 1
+                FROM `tabEmployee` emp_rm
+                LEFT JOIN `tabEmployee` mgr
+                    ON mgr.name = emp_rm.reports_to
+                WHERE emp_rm.name = {table}.`{employee_field}`
+                  AND {mgr_user_expr} = {user}
+            )
         )
     """.format(
         approver_expr=sql_norm("{0}.`{1}`".format(table, APPROVER_FIELD)),
         applicant_expr=sql_norm("{0}.`{1}`".format(table, APPLICANT_EMAIL_FIELD)),
         emp_user_expr=sql_norm("emp.`user_id`"),
+        mgr_user_expr=sql_norm("mgr.`user_id`"),
         table=table,
         employee_field=EMPLOYEE_FIELD,
         user=user_sql
@@ -57,15 +66,25 @@ def has_permission(doc, ptype, user=None):
     approver_email = norm(getattr(doc, APPROVER_FIELD, None))
     employee = getattr(doc, EMPLOYEE_FIELD, None)
 
+    # Direct approver
     if approver_email == user:
         return True
 
+    # Applicant email
     if applicant_email == user:
         return True
 
     if employee:
+        # Employee himself
         employee_user = norm(frappe.db.get_value("Employee", employee, "user_id"))
         if employee_user == user:
             return True
+
+        # Reporting manager
+        reports_to = frappe.db.get_value("Employee", employee, "reports_to")
+        if reports_to:
+            manager_user = norm(frappe.db.get_value("Employee", reports_to, "user_id"))
+            if manager_user == user:
+                return True
 
     return None
