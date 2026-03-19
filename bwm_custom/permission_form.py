@@ -43,6 +43,7 @@ def get_permission_query_conditions(user=None, doctype=None, **kwargs):
     )
 
 
+
 def has_permission(doc, ptype, user=None):
     user = norm(user or frappe.session.user)
     roles = set(frappe.get_roles(user))
