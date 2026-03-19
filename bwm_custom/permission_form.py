@@ -2,7 +2,7 @@ import frappe
 
 APPLICANT_EMAIL_FIELD = "employee_email_id"
 DOC_APPROVER_FIELD = "leave_approver"
-EMPLOYEE_FIELD = "employee_id"
+EMPLOYEE_FIELD = "employee_name"
 EMPLOYEE_LEAVE_APPROVER_FIELD = "leave_approver"
 
 HR_ROLES = {
