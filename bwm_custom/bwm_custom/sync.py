@@ -16,8 +16,10 @@ MAX_DAYS_WINDOW = 7
 def _safe_str(v):
     return (v or "").strip()
 
+
 def _now():
     return now_datetime()
+
 
 def _dt(v):
     try:
@@ -25,8 +27,10 @@ def _dt(v):
     except Exception:
         return None
 
+
 def _throw(msg):
     frappe.throw(msg)
+
 
 def _format_indiamart_dt(dt_obj):
     if not dt_obj:
@@ -45,9 +49,11 @@ def _format_indiamart_dt(dt_obj):
 
     return dd + "-" + mm + "-" + yyyy + " " + HH + ":" + MM + ":" + SS
 
+
 def _encode_qs_value(val):
     s = _safe_str(val)
     return quote(s, safe=":-_.")
+
 
 def _build_full_url(base_url, params):
     base = _safe_str(base_url).strip()
@@ -110,35 +116,46 @@ def _pick_im_enquiry_id(row):
 def _guess_full_name(row):
     return _safe_str(row.get("SENDER_NAME") or row.get("SenderName") or row.get("NAME") or "")
 
+
 def _guess_mobile(row):
     return _safe_str(row.get("SENDER_MOBILE") or row.get("SenderMobile") or row.get("MOBILE") or "")
+
 
 def _guess_email(row):
     return _safe_str(row.get("SENDER_EMAIL") or row.get("SenderEmail") or row.get("EMAIL") or "")
 
+
 def _guess_company(row):
     return _safe_str(row.get("SENDER_COMPANY") or row.get("COMPANY") or "")
+
 
 def _guess_city(row):
     return _safe_str(row.get("SENDER_CITY") or row.get("CITY") or "")
 
+
 def _guess_state(row):
     return _safe_str(row.get("SENDER_STATE") or row.get("STATE") or "")
+
 
 def _guess_country(row):
     return _safe_str(row.get("SENDER_COUNTRY_ISO") or row.get("SENDER_COUNTRY") or row.get("COUNTRY") or "")
 
+
 def _guess_pincode(row):
     return _safe_str(row.get("SENDER_PINCODE") or row.get("PINCODE") or row.get("PIN_CODE") or "")
+
 
 def _guess_address(row):
     return _safe_str(row.get("SENDER_ADDRESS") or row.get("ADDRESS") or "")
 
+
 def _guess_subject(row):
     return _safe_str(row.get("SUBJECT") or "")
 
+
 def _guess_product_name(row):
     return _safe_str(row.get("QUERY_PRODUCT_NAME") or row.get("PRODUCT_NAME") or "")
+
 
 def _guess_message(row):
     return _safe_str(row.get("QUERY_MESSAGE") or row.get("ENQ_MESSAGE") or row.get("MESSAGE") or "")
@@ -198,32 +215,58 @@ def _get_table_multiselect_link_field():
 
     return ""
 
-# CHANGED: now mapping by CITY instead of STATE
-def _get_mapping_doc(settings_name, city_name):
+
+def _get_mapping_doc(settings_name, city_name=None, state_name=None):
     city_name_norm = _norm_txt(city_name)
-    if not settings_name or not city_name_norm:
+    state_name_norm = _norm_txt(state_name)
+
+    if not settings_name:
         return None
 
     meta = frappe.get_meta("IndiaMART Mapping")
-    if not meta.has_field("city"):
+
+    has_city = meta.has_field("city")
+    has_state = meta.has_field("state")
+
+    if not has_city and not has_state:
         return None
+
+    fields = ["name"]
+    if has_city:
+        fields.append("city")
+    if has_state:
+        fields.append("state")
 
     rows = frappe.get_all(
         "IndiaMART Mapping",
         filters={"india_mart_api_settings": settings_name},
-        fields=["name", "city"]
+        fields=fields
     )
 
-    for row in rows:
-        if _norm_txt(row.get("city")) == city_name_norm:
-            return frappe.get_doc("IndiaMART Mapping", row.get("name"))
+    # 1. Exact city field match
+    if has_city and city_name_norm:
+        for row in rows:
+            if _norm_txt(row.get("city")) == city_name_norm:
+                return frappe.get_doc("IndiaMART Mapping", row.get("name"))
+
+    # 2. Backward compatibility:
+    # if city value was wrongly stored inside state field
+    if has_state and city_name_norm:
+        for row in rows:
+            if _norm_txt(row.get("state")) == city_name_norm:
+                return frappe.get_doc("IndiaMART Mapping", row.get("name"))
+
+    # 3. Real state match
+    if has_state and state_name_norm:
+        for row in rows:
+            if _norm_txt(row.get("state")) == state_name_norm:
+                return frappe.get_doc("IndiaMART Mapping", row.get("name"))
 
     return None
 
 
-# CHANGED: now receives city_name instead of state_name
-def _set_territory_rows(doc, settings_name, city_name):
-    mapping_doc = _get_mapping_doc(settings_name, city_name)
+def _set_territory_rows(doc, settings_name, city_name=None, state_name=None):
+    mapping_doc = _get_mapping_doc(settings_name, city_name, state_name)
     if not mapping_doc:
         return
 
@@ -358,8 +401,7 @@ def _upsert_enquiry(row, settings_doc):
             if v is not None and v != "":
                 doc.set(k, v)
 
-        # CHANGED: tag territory from IndiaMART Mapping using setting + city
-        _set_territory_rows(doc, settings_doc.name, enquiry_city)
+        _set_territory_rows(doc, settings_doc.name, enquiry_city, enquiry_state)
 
         doc.save(ignore_permissions=True)
         return "duplicate"
@@ -369,8 +411,7 @@ def _upsert_enquiry(row, settings_doc):
         if v is not None and v != "":
             doc.set(k, v)
 
-    # CHANGED: tag territory from IndiaMART Mapping using setting + city
-    _set_territory_rows(doc, settings_doc.name, enquiry_city)
+    _set_territory_rows(doc, settings_doc.name, enquiry_city, enquiry_state)
 
     doc.insert(ignore_permissions=True)
     return "created"
@@ -450,7 +491,10 @@ def run_sync(setting_name):
         if counts["errors"] > 0:
             status = "Partial"
 
-        error_lines.append("Chunk Start=" + _format_indiamart_dt(chunk_start) + " | Chunk End=" + _format_indiamart_dt(chunk_end))
+        error_lines.append(
+            "Chunk Start=" + _format_indiamart_dt(chunk_start) +
+            " | Chunk End=" + _format_indiamart_dt(chunk_end)
+        )
         error_lines.append("URL=" + full_url)
 
         _finish_sync_log(log_name, status, counts, "\n".join([x for x in error_lines if x]))
