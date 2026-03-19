@@ -23,10 +23,12 @@ HR_ROLES = {
 
 
 def norm(value):
+    """Normalize Python value for safe comparison."""
     return (value or "").strip().lower()
 
 
 def sql_norm(expr):
+    """Normalize SQL expression for safe comparison."""
     return "LOWER(TRIM(IFNULL({0}, '')))".format(expr)
 
 
