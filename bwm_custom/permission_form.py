@@ -21,10 +21,14 @@ def sql_norm(expr):
     return "LOWER(TRIM(IFNULL({0}, '')))".format(expr)
 
 
+# ================================
+# QUERY LEVEL PERMISSION (LIST VIEW)
+# ================================
 def get_permission_query_conditions(user=None, doctype=None, **kwargs):
     user = norm(user or frappe.session.user)
     roles = set(frappe.get_roles(user))
 
+    # HR can see all
     if HR_ROLES & roles:
         return ""
 
@@ -36,12 +40,14 @@ def get_permission_query_conditions(user=None, doctype=None, **kwargs):
             {applicant_expr} = {user}
             OR {doc_approver_expr} = {user}
             OR {owner_expr} = {user}
+
             OR EXISTS (
                 SELECT 1
                 FROM `tabEmployee` emp
                 WHERE emp.name = {table}.`{employee_field}`
                   AND {emp_user_expr} = {user}
             )
+
             OR EXISTS (
                 SELECT 1
                 FROM `tabEmployee` emp_rm
@@ -50,30 +56,35 @@ def get_permission_query_conditions(user=None, doctype=None, **kwargs):
                 WHERE emp_rm.name = {table}.`{employee_field}`
                   AND {mgr_user_expr} = {user}
             )
+
             OR EXISTS (
                 SELECT 1
                 FROM `tabEmployee` emp_la
                 WHERE emp_la.name = {table}.`{employee_field}`
-                  AND {emp_leave_approver_expr} = {user}
+                  AND LOWER(TRIM(IFNULL(emp_la.`{emp_leave_approver_field}`, ''))) = {user}
             )
         )
     """.format(
-        applicant_expr=sql_norm("{0}.`{1}`".format(table, APPLICANT_EMAIL_FIELD)),
-        doc_approver_expr=sql_norm("{0}.`{1}`".format(table, DOC_APPROVER_FIELD)),
-        owner_expr=sql_norm("{0}.`owner`".format(table)),
+        applicant_expr=sql_norm(f"{table}.`{APPLICANT_EMAIL_FIELD}`"),
+        doc_approver_expr=sql_norm(f"{table}.`{DOC_APPROVER_FIELD}`"),
+        owner_expr=sql_norm(f"{table}.`owner`"),
         emp_user_expr=sql_norm("emp.`user_id`"),
         mgr_user_expr=sql_norm("mgr.`user_id`"),
-        emp_leave_approver_expr=sql_norm("emp_la.`{0}`".format(EMPLOYEE_LEAVE_APPROVER_FIELD)),
         table=table,
         employee_field=EMPLOYEE_FIELD,
+        emp_leave_approver_field=EMPLOYEE_LEAVE_APPROVER_FIELD,
         user=user_sql
     )
 
 
+# ================================
+# DOC LEVEL PERMISSION (FORM VIEW)
+# ================================
 def has_permission(doc, ptype, user=None):
     user = norm(user or frappe.session.user)
     roles = set(frappe.get_roles(user))
 
+    # HR can see all
     if HR_ROLES & roles:
         return True
 
@@ -82,7 +93,7 @@ def has_permission(doc, ptype, user=None):
     owner = norm(getattr(doc, "owner", None))
     employee = getattr(doc, EMPLOYEE_FIELD, None)
 
-    # Applicant on Permission Form
+    # Applicant
     if applicant == user:
         return True
 
@@ -90,24 +101,28 @@ def has_permission(doc, ptype, user=None):
     if owner == user:
         return True
 
-    # Approver on Permission Form
+    # Approver in document
     if doc_approver == user:
         return True
 
     if employee:
         # Employee himself
-        employee_user = norm(frappe.db.get_value("Employee", employee, "user_id"))
+        employee_user = norm(
+            frappe.db.get_value("Employee", employee, "user_id")
+        )
         if employee_user == user:
             return True
 
-        # Reporting manager from Employee.reports_to
+        # Reporting Manager
         reports_to = frappe.db.get_value("Employee", employee, "reports_to")
         if reports_to:
-            manager_user = norm(frappe.db.get_value("Employee", reports_to, "user_id"))
+            manager_user = norm(
+                frappe.db.get_value("Employee", reports_to, "user_id")
+            )
             if manager_user == user:
                 return True
 
-        # Leave approver from Employee master
+        # Employee Master Leave Approver
         employee_leave_approver = norm(
             frappe.db.get_value("Employee", employee, EMPLOYEE_LEAVE_APPROVER_FIELD)
         )
