@@ -1,5 +1,4 @@
 import frappe
-
 APPLICANT_EMAIL_FIELD = "custom_employee_email_id"
 APPROVER_FIELD = "leave_approver"
 EMPLOYEE_FIELD = "employee"
