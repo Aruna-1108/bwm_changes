@@ -1,14 +1,19 @@
 import frappe
 
-APPLICANT_EMAIL_FIELD = "custom_employee_email_id"
+APPLICANT_EMAIL_FIELD = "employee_email_id"
 APPROVER_FIELD = "leave_approver"
-EMPLOYEE_FIELD = "employee"
+EMPLOYEE_FIELD = "employee_id"
 
-HR_ROLES = {"HR Manager", "System Manager", "HR User", "Administrator"}
+HR_ROLES = {
+    "HR Manager",
+    "System Manager",
+    "HR User",
+    "Administrator"
+}
 
 
-def norm(v):
-    return (v or "").strip().lower()
+def norm(value):
+    return (value or "").strip().lower()
 
 
 def sql_norm(expr):
@@ -22,13 +27,14 @@ def get_permission_query_conditions(user=None, doctype=None, **kwargs):
     if HR_ROLES & roles:
         return ""
 
+    table = "`tabPermission Form`"
     user_sql = frappe.db.escape(user)
-    table = "`tabLeave Application`"
 
     return """
         (
-            {approver_expr} = {user}
-            OR {applicant_expr} = {user}
+            {applicant_expr} = {user}
+            OR {approver_expr} = {user}
+            OR {owner_expr} = {user}
             OR EXISTS (
                 SELECT 1
                 FROM `tabEmployee` emp
@@ -45,8 +51,9 @@ def get_permission_query_conditions(user=None, doctype=None, **kwargs):
             )
         )
     """.format(
-        approver_expr=sql_norm("{0}.`{1}`".format(table, APPROVER_FIELD)),
         applicant_expr=sql_norm("{0}.`{1}`".format(table, APPLICANT_EMAIL_FIELD)),
+        approver_expr=sql_norm("{0}.`{1}`".format(table, APPROVER_FIELD)),
+        owner_expr=sql_norm("{0}.`owner`".format(table)),
         emp_user_expr=sql_norm("emp.`user_id`"),
         mgr_user_expr=sql_norm("mgr.`user_id`"),
         table=table,
@@ -62,25 +69,25 @@ def has_permission(doc, ptype, user=None):
     if HR_ROLES & roles:
         return True
 
-    applicant_email = norm(getattr(doc, APPLICANT_EMAIL_FIELD, None))
-    approver_email = norm(getattr(doc, APPROVER_FIELD, None))
+    applicant = norm(getattr(doc, APPLICANT_EMAIL_FIELD, None))
+    approver = norm(getattr(doc, APPROVER_FIELD, None))
+    owner = norm(getattr(doc, "owner", None))
     employee = getattr(doc, EMPLOYEE_FIELD, None)
 
-    # Direct approver
-    if approver_email == user:
+    if applicant == user:
         return True
 
-    # Applicant email
-    if applicant_email == user:
+    if owner == user:
+        return True
+
+    if approver == user:
         return True
 
     if employee:
-        # Employee himself
         employee_user = norm(frappe.db.get_value("Employee", employee, "user_id"))
         if employee_user == user:
             return True
 
-        # Reporting manager
         reports_to = frappe.db.get_value("Employee", employee, "reports_to")
         if reports_to:
             manager_user = norm(frappe.db.get_value("Employee", reports_to, "user_id"))
