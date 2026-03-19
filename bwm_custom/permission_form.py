@@ -1,61 +1,89 @@
 import frappe
 
-# --- CONFIG ---
-APPLICANT_EMAIL_FIELD = "employee_email_id"   # stores User ID (email)
-APPROVER_FIELD        = "leave_approver"      # stores User ID (email)
-HR_ROLES = {"HR Manager", "System Manager", "HR User", "Administrator"}
-# -------------
+# =========================================================
+# Permission Form - User Permission Script
+# =========================================================
+# Logic:
+# 1. HR/Admin roles -> full access to all records
+# 2. Applicant      -> full access to own record
+# 3. Owner          -> full access to own created record
+# 4. Approver       -> full access to assigned record
+# 5. Others         -> fall back to standard Frappe permissions
+# =========================================================
 
-def _sql_norm(expr: str) -> str:
-    """Case/space-insensitive compare for MariaDB/MySQL."""
-    return f"LOWER(TRIM({expr}))"
+APPLICANT_EMAIL_FIELD = "employee_email_id"   # stores User ID / email
+APPROVER_FIELD = "leave_approver"             # stores User ID / email
 
-def get_permission_query_conditions(user: str | None = None,
-                                    doctype: str | None = None, **kwargs) -> str:
+HR_ROLES = {
+    "HR Manager",
+    "System Manager",
+    "HR User",
+    "Administrator"
+}
+
+
+def norm(value):
+    return (value or "").strip().lower()
+
+
+def sql_norm(expr):
+    return "LOWER(TRIM(IFNULL({0}, '')))".format(expr)
+
+
+def get_permission_query_conditions(user=None, doctype=None, **kwargs):
     """
-    HR roles -> see all
-    Others   -> rows where applicant OR approver (or owner) equals current user id
+    Controls which records are visible in list view.
+    HR/Admin -> all
+    Others   -> applicant OR approver OR owner matches logged-in user
     """
-    user = (user or frappe.session.user or "").strip()
+    user = norm(user or frappe.session.user)
     roles = set(frappe.get_roles(user))
+
     if HR_ROLES & roles:
         return ""
 
     table = "`tabPermission Form`"
     user_sql = frappe.db.escape(user)
 
-    return f"""
-        {_sql_norm(f"{table}.`{APPLICANT_EMAIL_FIELD}`")} = LOWER(TRIM({user_sql}))
-        OR {_sql_norm(f"{table}.`{APPROVER_FIELD}`")}    = LOWER(TRIM({user_sql}))
-        OR {_sql_norm(f"{table}.`owner`")}               = LOWER(TRIM({user_sql}))
-    """
+    return """
+        (
+            {applicant_expr} = {user}
+            OR {approver_expr} = {user}
+            OR {owner_expr} = {user}
+        )
+    """.format(
+        applicant_expr=sql_norm("{0}.`{1}`".format(table, APPLICANT_EMAIL_FIELD)),
+        approver_expr=sql_norm("{0}.`{1}`".format(table, APPROVER_FIELD)),
+        owner_expr=sql_norm("{0}.`owner`".format(table)),
+        user=user_sql
+    )
 
-def has_permission(doc, ptype, user):
+
+def has_permission(doc, ptype, user=None):
     """
-    - HR/Admin always have access.
-    - Applicant can access their own request.
-    - Approver can ALWAYS open assigned forms (read/print/email/share).
-    - For other cases, defer to Role Permission Manager by returning None.
+    Controls access to an individual document.
     """
+    user = norm(user or frappe.session.user)
     roles = set(frappe.get_roles(user))
+
     if HR_ROLES & roles:
         return True
 
-    def norm(v): return (v or "").strip().lower()
-    u = norm(user)
+    applicant = norm(getattr(doc, APPLICANT_EMAIL_FIELD, None))
+    approver = norm(getattr(doc, APPROVER_FIELD, None))
+    owner = norm(getattr(doc, "owner", None))
 
-    # Applicant access
-    if norm(getattr(doc, APPLICANT_EMAIL_FIELD, None)) == u:
+    # Applicant -> full access
+    if applicant == user:
         return True
 
-    # Approver access (always allowed to open)
-    if norm(getattr(doc, APPROVER_FIELD, None)) == u:
-        if ptype in {"read", "print", "email", "share"}:
-            return True
-        # If approvers should also edit/submit, uncomment below:
-        # if ptype in {"read", "print", "email", "share", "write", "submit"}:
-        #     return True
-        return None
+    # Owner -> full access
+    if owner == user:
+        return True
 
-    # Not matched → let Role Permission Manager decide
+    # Approver -> full access
+    if approver == user:
+        return True
+
+    # Let standard Frappe permissions decide
     return None
