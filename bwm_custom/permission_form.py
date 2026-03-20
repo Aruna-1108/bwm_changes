@@ -2,15 +2,10 @@ import frappe
 
 APPLICANT_EMAIL_FIELD = "employee_email_id"
 DOC_APPROVER_FIELD = "leave_approver"
-EMPLOYEE_FIELD = "employee_name"
+EMPLOYEE_FIELD = "employee_name"   # Link to Employee
 EMPLOYEE_LEAVE_APPROVER_FIELD = "leave_approver"
 
-HR_ROLES = {
-    "HR Manager",
-    "System Manager",
-    "HR User",
-    "Administrator"
-}
+HR_ROLES = {"HR Manager", "System Manager", "HR User", "Administrator"}
 
 
 def norm(value):
@@ -18,7 +13,7 @@ def norm(value):
 
 
 def sql_norm(expr):
-    return "LOWER(TRIM(IFNULL({0}, '')))".format(expr)
+    return f"LOWER(TRIM(IFNULL({expr}, '')))"
 
 
 # ================================
@@ -35,46 +30,39 @@ def get_permission_query_conditions(user=None, doctype=None, **kwargs):
     table = "`tabPermission Form`"
     user_sql = frappe.db.escape(user)
 
-    return """
+    return f"""
         (
-            {applicant_expr} = {user}
-            OR {doc_approver_expr} = {user}
-            OR {owner_expr} = {user}
+            {sql_norm(f"{table}.`{APPLICANT_EMAIL_FIELD}`")} = {user_sql}
+            OR {sql_norm(f"{table}.`{DOC_APPROVER_FIELD}`")} = {user_sql}
+            OR {sql_norm(f"{table}.`owner`")} = {user_sql}
 
+            -- Employee himself
             OR EXISTS (
                 SELECT 1
                 FROM `tabEmployee` emp
-                WHERE emp.name = {table}.`{employee_field}`
-                  AND {emp_user_expr} = {user}
+                WHERE emp.name = {table}.`{EMPLOYEE_FIELD}`
+                AND {sql_norm("emp.`user_id`")} = {user_sql}
             )
 
+            -- Reporting Manager
             OR EXISTS (
                 SELECT 1
                 FROM `tabEmployee` emp_rm
                 LEFT JOIN `tabEmployee` mgr
                     ON mgr.name = emp_rm.reports_to
-                WHERE emp_rm.name = {table}.`{employee_field}`
-                  AND {mgr_user_expr} = {user}
+                WHERE emp_rm.name = {table}.`{EMPLOYEE_FIELD}`
+                AND {sql_norm("mgr.`user_id`")} = {user_sql}
             )
 
+            -- Leave Approver (Employee Master)
             OR EXISTS (
                 SELECT 1
                 FROM `tabEmployee` emp_la
-                WHERE emp_la.name = {table}.`{employee_field}`
-                  AND LOWER(TRIM(IFNULL(emp_la.`{emp_leave_approver_field}`, ''))) = {user}
+                WHERE emp_la.name = {table}.`{EMPLOYEE_FIELD}`
+                AND {sql_norm(f"emp_la.`{EMPLOYEE_LEAVE_APPROVER_FIELD}`")} = {user_sql}
             )
         )
-    """.format(
-        applicant_expr=sql_norm(f"{table}.`{APPLICANT_EMAIL_FIELD}`"),
-        doc_approver_expr=sql_norm(f"{table}.`{DOC_APPROVER_FIELD}`"),
-        owner_expr=sql_norm(f"{table}.`owner`"),
-        emp_user_expr=sql_norm("emp.`user_id`"),
-        mgr_user_expr=sql_norm("mgr.`user_id`"),
-        table=table,
-        employee_field=EMPLOYEE_FIELD,
-        emp_leave_approver_field=EMPLOYEE_LEAVE_APPROVER_FIELD,
-        user=user_sql
-    )
+    """
 
 
 # ================================
@@ -122,11 +110,11 @@ def has_permission(doc, ptype, user=None):
             if manager_user == user:
                 return True
 
-        # Employee Master Leave Approver
+        # Leave Approver from Employee Master
         employee_leave_approver = norm(
             frappe.db.get_value("Employee", employee, EMPLOYEE_LEAVE_APPROVER_FIELD)
         )
         if employee_leave_approver == user:
             return True
 
-    return None
+    return False
