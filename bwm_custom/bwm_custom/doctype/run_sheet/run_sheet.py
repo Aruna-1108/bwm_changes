@@ -33,6 +33,8 @@ def _fill_party_common(row):
     """
     party_type = getattr(row, "party_type", None)
     party      = getattr(row, "party", None)
+    if party_type == "Non Existing Customer":
+        return
 
     # Default values if nothing to fill
     addr_html = ""
@@ -64,11 +66,12 @@ def _fill_party_common(row):
                 phone = lead_vals.mobile_no or lead_vals.phone or ""
 
    
-    if hasattr(row, "address"):
-        row.address = addr_html or ""
-    if hasattr(row, "phone_number"):
-        row.phone_number = phone or ""
+    if hasattr(row, "address") and addr_html:
+        row.address = addr_html
 
+    if hasattr(row, "phone_number") and phone:
+        row.phone_number = phone
+   
 
 def _fill_lead_specifics(row):
     """Populate 'lead_name' when party_type = Lead."""
