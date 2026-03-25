@@ -156,6 +156,14 @@ def _guess_subject(row):
 def _guess_product_name(row):
     return _safe_str(row.get("QUERY_PRODUCT_NAME") or row.get("PRODUCT_NAME") or "")
 
+def _guess_product_category(row):
+    return _safe_str(
+        row.get("QUERY_MCAT_NAME") or
+        row.get("QUERY_PRODUCT_CATEGORY") or
+        row.get("PRODUCT_CATEGORY") or
+        ""
+    )
+
 
 def _guess_message(row):
     return _safe_str(row.get("QUERY_MESSAGE") or row.get("ENQ_MESSAGE") or row.get("MESSAGE") or "")
@@ -371,6 +379,7 @@ def _upsert_enquiry(row, settings_doc):
         "email": _guess_email(row),
 
         "product_name": _guess_product_name(row),
+        "product_category":_guess_product_category(row),
         "subject": _guess_subject(row),
 
         "city": enquiry_city,
