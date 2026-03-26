@@ -4,6 +4,7 @@ from frappe.utils import now_datetime, get_datetime, add_to_date
 
 from urllib.parse import quote
 from datetime import datetime
+from frappe.utils import strip_html
 
 
 SETTINGS_DOCTYPE = "India Mart API Settings"
@@ -389,7 +390,7 @@ def _upsert_enquiry(row, settings_doc):
         "pin_code": _guess_pincode(row),
         "address": _guess_address(row),
 
-        "message": _guess_message(row),
+        "message": strip_html(_guess_message(row)),
 
         "receiver_mobile": _safe_str(row.get("RECEIVER_MOBILE") or ""),
         "sender_id": _safe_str(row.get("SENDER_ID") or ""),
