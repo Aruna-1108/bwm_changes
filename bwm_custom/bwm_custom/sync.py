@@ -164,7 +164,14 @@ def _guess_product_category(row):
         row.get("PRODUCT_CATEGORY") or
         ""
     )
-
+def _guess_sender_id(row):
+    return _safe_str(
+        row.get("SENDER_ID") or
+        row.get("SENDERID") or
+        row.get("SenderId") or
+        row.get("sender_id") or
+        ""
+    )
 
 def _guess_message(row):
     return _safe_str(row.get("QUERY_MESSAGE") or row.get("ENQ_MESSAGE") or row.get("MESSAGE") or "")
@@ -393,7 +400,7 @@ def _upsert_enquiry(row, settings_doc):
         "message": strip_html(_guess_message(row)),
 
         "receiver_mobile": _safe_str(row.get("RECEIVER_MOBILE") or ""),
-        "sender_id": _safe_str(row.get("SENDER_ID") or ""),
+        "sender_id": _guess_sender_id(row),
         "call_duration": _safe_str(row.get("CALL_DURATION") or ""),
     }
 
@@ -407,7 +414,10 @@ def _upsert_enquiry(row, settings_doc):
 
     if existing:
         doc = frappe.get_doc(ENQUIRY_DOCTYPE, existing)
+        PROTECTED_FIELDS = {"status", "sync_status"}
         for k, v in data.items():
+            if k in PROTECTED_FIELDS:
+                continue
             if v is not None and v != "":
                 doc.set(k, v)
 
