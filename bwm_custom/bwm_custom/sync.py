@@ -178,31 +178,27 @@ def _guess_message(row):
 
 
 def _guess_query_type(row):
-    """
-    Your DocType allows: Call, Buy Lead, Direct
-    IndiaMART may send: B/C/D
-    """
     v = _safe_str(row.get("QUERY_TYPE") or row.get("QueryType") or row.get("query_type") or "")
     if not v:
         return ""
 
     u = v.upper()
 
-    if u == "B":
+    if u in ("B", "BUY LEAD"):
         return "Buy Lead"
-    if u == "C":
+    if u in ("C", "CALL", "MISSED-CALL", "MISSED CALL", "MC"):
         return "Call"
-    if u == "D":
+    if u in ("D", "DIRECT"):
         return "Direct"
 
     if "BUY" in u:
         return "Buy Lead"
-    if "CALL" in u:
+    if "CALL" in u or "MISSED" in u:
         return "Call"
     if "DIRECT" in u:
         return "Direct"
 
-    return "Direct"
+    return ""  # ← was "Direct" before, now blank so it doesn't wrongly override
 
 
 # =========================
