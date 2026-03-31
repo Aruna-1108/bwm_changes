@@ -371,6 +371,7 @@ def _upsert_enquiry(row, settings_doc):
         "im_enquiry_id": im_enquiry_id,
         "indiamart_api_setting_id": settings_doc.name,
         "lead_user": settings_doc.lead_user,
+        "source": "IndiaMart" or "",
 
         "full_name": _guess_full_name(row),
         "company": _guess_company(row),
