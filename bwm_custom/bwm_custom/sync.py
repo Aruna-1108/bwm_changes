@@ -12,6 +12,7 @@ LOG_DOCTYPE = "India MART Sync Log"
 ENQUIRY_DOCTYPE = "IndiaMART Enquiry Details"
 ENQUIRY_UNIQUE_FIELD = "im_enquiry_id"
 MAX_DAYS_WINDOW = 7
+SOURCE_NAME = "IndiaMart"
 
 
 def _safe_str(v):
@@ -112,6 +113,16 @@ def _pick_im_enquiry_id(row):
         or row.get("QueryId")
         or row.get("query_id")
     )
+
+def _ensure_lead_source(source_name):
+    if not source_name:
+        return
+    if not frappe.db.exists("Lead Source", source_name):
+        frappe.get_doc({
+            "doctype": "Lead Source",
+            "source_name": source_name
+        }).insert(ignore_permissions=True)
+        frappe.db.commit()
 
 
 def _guess_full_name(row):
@@ -371,7 +382,7 @@ def _upsert_enquiry(row, settings_doc):
         "im_enquiry_id": im_enquiry_id,
         "indiamart_api_setting_id": settings_doc.name,
         "lead_user": settings_doc.lead_user,
-        "source": "IndiaMart" or "",
+        "source": SOURCE_NAME,
 
         "full_name": _guess_full_name(row),
         "company": _guess_company(row),
