@@ -114,6 +114,7 @@ def _pick_im_enquiry_id(row):
     )
 
 
+
 def _guess_full_name(row):
     return _safe_str(row.get("SENDER_NAME") or row.get("SenderName") or row.get("NAME") or "")
 
@@ -371,7 +372,7 @@ def _upsert_enquiry(row, settings_doc):
         "im_enquiry_id": im_enquiry_id,
         "indiamart_api_setting_id": settings_doc.name,
         "lead_user": settings_doc.lead_user,
-        "source": "IndiaMart" or "",
+        
 
         "full_name": _guess_full_name(row),
         "company": _guess_company(row),
