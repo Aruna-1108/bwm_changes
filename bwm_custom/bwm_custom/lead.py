@@ -95,6 +95,7 @@ def upsert_lead_from_indiamart(enquiry_name):
             "lead_name": full_name,
             "company_name": getattr(enq, "company", "") or "",
             "mobile_no": mobile or "",
+            "source":"IndiaMart",
             "phone": mobile or "",
             "email_id": email or "",
             "city": getattr(enq, "city", "") or "",
