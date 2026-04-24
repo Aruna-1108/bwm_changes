@@ -11,11 +11,14 @@ def upsert_lead_from_indiamart(enquiry_name):
     IndiaMART Enquiry -> Lead Upsert
 
     Rules:
-    1) Find existing Lead by mobile_no first, else email_id
-    2) If Lead exists: append a child row to Lead.custom_enquiry_details
-       - prevent duplicate by indiamart_enquiry_id
-    3) If Lead not exists: create Lead with 1 child row
-    4) Update IndiaMART Enquiry Details:
+    1) Skip if enquiry status is already "Lead Converted"
+    2) Find existing Lead by mobile_no first, else email_id
+    3) If Lead exists: find child row by indiamart_enquiry_id
+       - if found and nothing changed: skip save
+       - if found and changed: update fields and save
+       - if not found: append new row
+    4) If Lead not exists: create Lead with 1 child row
+    5) Update IndiaMART Enquiry Details:
        - status = "Lead Converted"
        - sync_status = "Converted"
        - lead = lead_name (if field exists)
@@ -28,6 +31,16 @@ def upsert_lead_from_indiamart(enquiry_name):
         frappe.throw("Not permitted: need READ on IndiaMART Enquiry Details")
 
     enq = frappe.get_doc("IndiaMART Enquiry Details", enquiry_name)
+
+    # Skip if already processed
+    if _s(getattr(enq, "status", "")) == "Lead Converted":
+        return {
+            "lead": _s(getattr(enq, "lead", "")),
+            "created": 0,
+            "appended": 0,
+            "updated": 0,
+            "skipped": 1
+        }
 
     full_name = _s(getattr(enq, "full_name", ""))
     if not full_name:
@@ -62,7 +75,8 @@ def upsert_lead_from_indiamart(enquiry_name):
 
     created = 0
     appended = 0
-    duplicate = 0
+    updated = 0
+    skipped = 0
 
     if lead_name:
         if not frappe.has_permission("Lead", "write", lead_name):
@@ -73,13 +87,36 @@ def upsert_lead_from_indiamart(enquiry_name):
         if not hasattr(lead, "custom_enquiry_details"):
             frappe.throw("Lead is missing field: custom_enquiry_details")
 
+        existing_row = None
         if enquiry_id:
             for r in (lead.custom_enquiry_details or []):
                 if _s(getattr(r, "indiamart_enquiry_id", "")) == enquiry_id:
-                    duplicate = 1
+                    existing_row = r
                     break
 
-        if not duplicate:
+        if existing_row:
+            # Check if anything actually changed
+            changed = (
+                _s(existing_row.enquiry_date)     != _s(row_values["enquiry_date"])     or
+                _s(existing_row.product_name)     != _s(row_values["product_name"])     or
+                _s(existing_row.product_category) != _s(row_values["product_category"]) or
+                _s(existing_row.remarks)          != _s(row_values["remarks"])          or
+                _s(existing_row.enquiry_owner)    != _s(row_values["enquiry_owner"])
+            )
+
+            if changed:
+                existing_row.enquiry_date     = row_values["enquiry_date"]
+                existing_row.product_name     = row_values["product_name"]
+                existing_row.product_category = row_values["product_category"]
+                existing_row.remarks          = row_values["remarks"]
+                existing_row.enquiry_owner    = row_values["enquiry_owner"]
+                lead.save(ignore_permissions=False)
+                updated = 1
+            else:
+                skipped = 1  # Nothing changed, skip save
+
+        else:
+            # New enquiry_id — append fresh row
             lead.append("custom_enquiry_details", row_values)
             lead.save(ignore_permissions=False)
             appended = 1
@@ -95,7 +132,7 @@ def upsert_lead_from_indiamart(enquiry_name):
             "lead_name": full_name,
             "company_name": getattr(enq, "company", "") or "",
             "mobile_no": mobile or "",
-            "source":"IndiaMart",
+            "source": "IndiaMart",
             "phone": mobile or "",
             "email_id": email or "",
             "city": getattr(enq, "city", "") or "",
@@ -128,5 +165,6 @@ def upsert_lead_from_indiamart(enquiry_name):
         "lead": lead_name,
         "created": created,
         "appended": appended,
-        "duplicate": duplicate
+        "updated": updated,
+        "skipped": skipped
     }
