@@ -15,6 +15,17 @@
 #     * essl_infer_log_type (default ON)
 #     * essl_allow_duplicates (default OFF)
 #
+# Off Roll Enhancements:
+# - Device codes that do not map to an Employee are matched against the "Off Roll" master
+# - Those punches go into the SAME Employee Checkin table, with the Off Roll link stored in the
+#   custom field "custom_off_role_employee" (Employee Checkin.employee is a Link to Employee, so the
+#   off-roll id cannot go in that column; Employee must be made non-mandatory via Property Setter)
+# - Requires override_doctype_class -> bwm_custom.overrides.employee_checkin.BWMEmployeeCheckin
+# - Off-roll rows are always written with skip_auto_attendance = 1 (no shift, no auto attendance)
+# - Off Roll is treated as active when moved_to_on_role = 0 and the punch date lies between
+#   date_of_joining and date_of_relieving
+# - Settings toggle: essl_enable_off_roll (default ON)
+#
 # IMPORTANT: This build is "Active-only":
 #            Only Employees with status == "Active" will be inserted.
 #            Others are counted as "skipped_inactive" (no toggle to override).
@@ -25,7 +36,7 @@ from datetime import datetime, timedelta
 
 import frappe
 import requests
-from frappe.utils import get_datetime, cint
+from frappe.utils import get_datetime, cint, getdate
 
 SOAP_NS = "http://schemas.xmlsoap.org/soap/envelope/"
 TEMPURI = "http://tempuri.org/"
@@ -35,6 +46,11 @@ TEMPURI = "http://tempuri.org/"
 # ---------------------------------------------------------------------------
 SETTINGS_DOTYPE = "ESSL"       # Your settings doctype label
 SETTINGS_NAME = "ESSL"         # If Single, its "name" equals the doctype
+
+# Off Roll (contract / NATS / NAPS workers who are not in the Employee master)
+OFF_ROLL_DOCTYPE = "Off Roll"
+CHECKIN_DOCTYPE = "Employee Checkin"
+CHECKIN_OFF_ROLL_FIELD = "custom_off_role_employee"   # Custom Field on Employee Checkin (Link -> Off Roll)
 
 # Aliases: read any of these fieldnames for the given logical key
 _CONF_ALIASES = {
@@ -47,6 +63,8 @@ _CONF_ALIASES = {
     "essl_site_url":         ["custom_site_url", "site_url"],  # not required; debug only
     "essl_last_cursor":      ["essl_last_cursor"],             # Datetime (global fallback)
     "essl_infer_log_type":   ["essl_infer_log_type"],          # Check (0/1); optional; defaults to ON
+    "essl_enable_off_roll":  ["essl_enable_off_roll"],         # Check (0/1); optional; defaults to ON
+    "essl_off_roll_device_field": ["essl_off_roll_device_field"],  # Data; fieldname on Off Roll holding the device code
 }
 
 # Optional child table on ESSL settings:
@@ -346,6 +364,121 @@ def _is_employee_active(emp_name: str) -> bool:
     return active
 
 
+# ---- Off Roll mapping / status ----
+_OFF_ROLL_ACTIVE_CACHE = {}
+
+
+def _off_roll_enabled() -> bool:
+    """Off Roll capture is ON unless disabled, and needs the custom field on Employee Checkin."""
+    if not cint(_conf("essl_enable_off_roll", 1)):
+        return False
+    try:
+        return bool(frappe.get_meta(CHECKIN_DOCTYPE).has_field(CHECKIN_OFF_ROLL_FIELD))
+    except Exception:
+        return False
+
+
+def _map_off_roll(emp_code: str) -> str | None:
+    """Map device emp_code -> Off Roll.name via:
+       1) configured device field (essl_off_roll_device_field) -> 2) Off Roll.name
+       -> 3) off_roll_employee_id
+    """
+    if not emp_code:
+        return None
+
+    device_field = _conf("essl_off_roll_device_field")
+    if device_field:
+        try:
+            name = frappe.db.get_value(OFF_ROLL_DOCTYPE, {device_field: emp_code}, "name")
+            if name:
+                return name
+        except Exception:
+            pass
+
+    if frappe.db.exists(OFF_ROLL_DOCTYPE, emp_code):
+        return emp_code
+
+    return frappe.db.get_value(OFF_ROLL_DOCTYPE, {"off_roll_employee_id": emp_code}, "name")
+
+
+def _is_off_roll_active(off_roll: str, ts) -> bool:
+    """Active = not moved to on-roll, joined on/before the punch date, not relieved before it."""
+    if not off_roll:
+        return False
+
+    punch_date = getdate(ts)
+    key = (off_roll, str(punch_date))
+    if key in _OFF_ROLL_ACTIVE_CACHE:
+        return _OFF_ROLL_ACTIVE_CACHE[key]
+
+    row = frappe.db.get_value(
+        OFF_ROLL_DOCTYPE, off_roll,
+        ["date_of_joining", "date_of_relieving", "moved_to_on_role"],
+        as_dict=True,
+    )
+
+    active = False
+    if row and not cint(row.get("moved_to_on_role")):
+        doj = row.get("date_of_joining")
+        dor = row.get("date_of_relieving")
+        if (not doj or getdate(doj) <= punch_date) and (not dor or getdate(dor) >= punch_date):
+            active = True
+
+    _OFF_ROLL_ACTIVE_CACHE[key] = active
+    return active
+
+
+def _infer_log_type_off_roll(off_roll: str, ts) -> str:
+    """Same alternating IN/OUT rule as Employee, counted on the Off Roll link column."""
+    r = frappe.db.sql(
+        f"""
+        SELECT COUNT(*) AS c
+        FROM `tab{CHECKIN_DOCTYPE}`
+        WHERE `{CHECKIN_OFF_ROLL_FIELD}` = %s
+          AND DATE(time) = DATE(%s)
+          AND time < %s
+        """,
+        (off_roll, ts, ts),
+        as_dict=True,
+    )
+    c = (r[0]["c"] if r else 0) or 0
+    return "IN" if c % 2 == 0 else "OUT"
+
+
+def _insert_off_roll_checkin(off_roll: str, ts, device_id="Biometrics"):
+    """Insert an Employee Checkin row for an Off Roll worker (employee left blank).
+       De-dup and auto log_type work exactly as for Employees.
+       Only active Off Roll records are allowed.
+    """
+    if not off_roll or not ts:
+        return "skipped_invalid_off_roll", None
+
+    if not _is_off_roll_active(off_roll, ts):
+        return "skipped_inactive_off_roll", None
+
+    allow_dups = cint(_conf("essl_allow_duplicates", 0))
+    if not allow_dups and frappe.db.exists(
+        CHECKIN_DOCTYPE, {CHECKIN_OFF_ROLL_FIELD: off_roll, "time": ts}
+    ):
+        return "skipped_existing_off_roll", None
+
+    log_type = None
+    if cint(_conf("essl_infer_log_type", 1)):
+        log_type = _infer_log_type_off_roll(off_roll, ts)
+
+    doc = frappe.get_doc({
+        "doctype": CHECKIN_DOCTYPE,
+        CHECKIN_OFF_ROLL_FIELD: off_roll,
+        "time": ts,
+        "device_id": device_id,
+        "skip_auto_attendance": 1,
+        **({"log_type": log_type} if log_type else {}),
+    })
+    doc.flags.ignore_permissions = True
+    doc.insert()
+    return "inserted_off_roll", doc.name
+
+
 def _infer_log_type(emp: str, ts) -> str:
     """
     Decide IN/OUT by alternating punches for an employee per calendar day.
@@ -433,38 +566,55 @@ def _sync_one_device(from_datetime: str, to_datetime: str, serial_number: str, p
             "skipped_invalid": 0,
             "unmatched": 0,
             "skipped_inactive": 0,   # NEW bucket (Active-only enforcement)
+            "inserted_off_roll": 0,
+            "skipped_existing_off_roll": 0,
+            "skipped_invalid_off_roll": 0,
+            "skipped_inactive_off_roll": 0,
         },
         "unmatched": [],   # up to 50 examples of unmapped employees
         "examples": [],    # up to 10 inserted (or preview) rows
     }
 
-    # Map device codes → Employee
+    # Map device codes → Employee, else → Off Roll
+    off_roll_on = _off_roll_enabled()
     mapped = []
     for r in raw_rows:
         emp = _map_employee(r["emp_code"])
-        if not emp:
-            out["counts"]["unmatched"] += 1
-            if len(out["unmatched"]) < 50:
-                out["unmatched"].append({"emp_code": r["emp_code"], "time": str(r["ts"])})
+        if emp:
+            mapped.append({"kind": "employee", "party": emp, "ts": r["ts"]})
             continue
-        mapped.append({"employee": emp, "ts": r["ts"]})
+
+        if off_roll_on:
+            off_roll = _map_off_roll(r["emp_code"])
+            if off_roll:
+                mapped.append({"kind": "off_roll", "party": off_roll, "ts": r["ts"]})
+                continue
+
+        out["counts"]["unmatched"] += 1
+        if len(out["unmatched"]) < 50:
+            out["unmatched"].append({"emp_code": r["emp_code"], "time": str(r["ts"])})
 
     # Insert or preview
     for m in mapped:
-        emp = m["employee"]
+        kind = m["kind"]
+        party = m["party"]
         ts = m["ts"]
 
         if preview:
             if len(out["examples"]) < 10:
-                out["examples"].append({"employee": emp, "time": str(ts)})
+                out["examples"].append({"kind": kind, "party": party, "time": str(ts)})
             continue
 
-        status, name = _insert_checkin(emp, ts, device_id=f"{serial or 'UNKNOWN'}")
+        if kind == "off_roll":
+            status, name = _insert_off_roll_checkin(party, ts, device_id=f"{serial or 'UNKNOWN'}")
+        else:
+            status, name = _insert_checkin(party, ts, device_id=f"{serial or 'UNKNOWN'}")
+
         if status not in out["counts"]:
             out["counts"][status] = 0
         out["counts"][status] += 1
-        if status == "inserted" and len(out["examples"]) < 10:
-            out["examples"].append({"name": name, "employee": emp, "time": str(ts)})
+        if status in ("inserted", "inserted_off_roll") and len(out["examples"]) < 10:
+            out["examples"].append({"name": name, "kind": kind, "party": party, "time": str(ts)})
 
     return out
 
@@ -503,6 +653,8 @@ def sync_realtime_tick(overlap_seconds: int = 90, backfill_minutes_if_empty: int
             "skipped_existing": 0,
             "skipped_invalid": 0,
             "unmatched": 0,
+            "inserted_off_roll": 0,
+            "skipped_existing_off_roll": 0,
             # (skipped_inactive per device; can be summed from devices if needed)
         },
     }
@@ -648,6 +800,9 @@ def essl_conf_debug():
         "global_last_cursor": _get_last_cursor_global(),
         "per_device_cursors": per_device_cursors,
         "essl_infer_log_type": cint(_conf("essl_infer_log_type", 1)),
+        "essl_enable_off_roll": cint(_conf("essl_enable_off_roll", 1)),
+        "off_roll_field_present": _off_roll_enabled(),
+        "essl_off_roll_device_field": _conf("essl_off_roll_device_field"),
         "password_present": bool(_conf("essl_password")),
         "child_table_present": bool(_get_child_rows_or_none(doc)),
     }
